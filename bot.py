@@ -351,7 +351,6 @@ def get_cancel_keyboard():
 def get_partner_chat_keyboard(request_number: int):
     return InlineKeyboardMarkup([[InlineKeyboardButton("✅ Забрать заявку", callback_data=f"accept_{request_number}")]])
 
-# НОВЫЕ КНОПКИ ДЛЯ ОТКАЗА
 def get_cancel_request_keyboard(request_number: int):
     return InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отказаться от заявки", callback_data=f"cancel_{request_number}")]])
 
@@ -381,13 +380,14 @@ SIMPLE_INSTRUCTION = """
 
 
 # ========== ОБРАБОТЧИКИ ==========
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start"""
     user_id = update.effective_user.id
     target_chat_id = int(CHAT_ID)
     
     if update.effective_chat.id == target_chat_id:
-        await update.message.reply_text("❌ Доступна только /status")
+        await update.message.reply_text("❌ В этом чате доступна только /status")
         return ConversationHandler.END
     
     if user_id not in user_states:
@@ -500,28 +500,33 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-async def my_requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /my_requests - показать взятые заявки и возможность отказа"""
-    user_id = update.effective_user.id
+async def handle_partner_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка чата партнеров"""
+    target_chat_id = int(CHAT_ID)
     
-    my_active = []
-    for req_num, req_data in user_requests.items():
-        if req_data.get('taken_by_id') == user_id and req_data['status'] == REQUEST_STATUS_ASSIGNED:
-            my_active.append((req_num, req_data))
-    
-    if not my_active:
-        await update.message.reply_text("📋 У вас нет активных взятых заявок")
+    if update.effective_chat.id != target_chat_id:
         return
     
-    for req_num, req_data in my_active:
-        keyboard = get_cancel_request_keyboard(req_num)
+    logger.info(f"🔵 Сообщение от @{update.effective_user.username}")
+    
+    # Ответ на сообщение
+    if update.message and update.message.reply_to_message:
+        replied_message = update.message.reply_to_message
+        partner = update.effective_user
+        partner_username = partner.username or f"user_{partner.id}"
+        
+        for req_num, req_data in user_requests.items():
+            if req_data.get('message_id') == replied_message.message_id and req_data.get('status') == REQUEST_STATUS_CREATED:
+                await accept_request(update, context, req_data, req_num, partner, partner_username, partner.full_name or partner_username, target_chat_id)
+                return
+        
+        await update.message.reply_text("❌ Заявка неактивна")
+        return
+    
+    # Простой текст
+    if update.message and update.message.text and not update.message.text.startswith('/'):
         await update.message.reply_text(
-            f"📦 Заявка №{req_num}\n"
-            f"📝 Адрес: {req_data['address']}\n"
-            f"👤 Продающий: @{req_data['username']}\n"
-            f"📞 Контакт: {req_data.get('contact', 'Не указан')}\n"
-            f"⏰ Взята: {req_data.get('taken_at', 'Неизвестно')}",
-            reply_markup=keyboard
+            "ℹ️ Забрать заявку:\n• Кнопка ✅\n• Ответ на сообщение\n• /take <номер>\n\n/status - список"
         )
 
 
@@ -557,53 +562,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text(text=query.message.text + "\n\n❌ Это не ваша заявка")
         else:
             await query.edit_message_text(text=query.message.text + "\n\n❌ Заявка уже неактивна")
-
-
-async def cancel_request(update_or_query, context, req_data, request_number):
-    """Отказ от заявки"""
-    
-    req_data['status'] = REQUEST_STATUS_CANCELLED
-    logger.info(f"❌ Партнёр @{req_data['taken_by_username']} отказался от заявки №{request_number}")
-    
-    # Обновляем статус в таблице
-    update_request_status(request_number, REQUEST_STATUS_CANCELLED)
-    
-    # Уведомление продающему партнёру
-    try:
-        if req_data.get('user_id'):
-            await context.bot.send_message(
-                chat_id=req_data['user_id'],
-                text=(
-                    f"⚠️ Заявка №{request_number}\n\n"
-                    f"Партнёр @{req_data['taken_by_username']} отказался от заявки.\n\n"
-                    f"📝 Адрес: {req_data['address']}\n"
-                    f"📞 Контакт: {req_data.get('contact', 'Не указан')}\n\n"
-                    f"❌ Отправьте заявку в СВК"
-                )
-            )
-            logger.info(f"✅ Уведомление об отказе отправлено @{req_data['username']}")
-    except Exception as e:
-        logger.error(f"❌ Ошибка уведомления об отказе: {e}")
-    
-    # Уведомление партнёру, который отказался
-    try:
-        await context.bot.send_message(
-            chat_id=req_data['taken_by_id'],
-            text=f"✅ Вы отказались от заявки №{request_number}"
-        )
-    except Exception as e:
-        logger.error(f"❌ Ошибка подтверждения отказа: {e}")
-    
-    # Удаляем кнопку из сообщения в чате
-    try:
-        if req_data.get('message_id'):
-            await context.bot.edit_message_text(
-                chat_id=int(CHAT_ID),
-                message_id=req_data['message_id'],
-                text=f"📦 Заявка №{request_number}\n📝 Адрес: {req_data['address']}\n👤 От: @{req_data['username']}\n\n❌ ОТКАЗ ПАРТНЁРА @{req_data['taken_by_username']}"
-            )
-    except Exception as e:
-        logger.error(f"❌ Ошибка обновления сообщения: {e}")
 
 
 async def accept_request(update_or_query, context, req_data, request_number, partner, 
@@ -725,6 +683,79 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📋 Нет активных заявок")
 
 
+async def my_requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /my_requests - показать взятые заявки и возможность отказа"""
+    user_id = update.effective_user.id
+    
+    my_active = []
+    for req_num, req_data in user_requests.items():
+        if req_data.get('taken_by_id') == user_id and req_data['status'] == REQUEST_STATUS_ASSIGNED:
+            my_active.append((req_num, req_data))
+    
+    if not my_active:
+        await update.message.reply_text("📋 У вас нет активных взятых заявок")
+        return
+    
+    for req_num, req_data in my_active:
+        keyboard = get_cancel_request_keyboard(req_num)
+        await update.message.reply_text(
+            f"📦 Заявка №{req_num}\n"
+            f"📝 Адрес: {req_data['address']}\n"
+            f"👤 Продающий: @{req_data['username']}\n"
+            f"📞 Контакт: {req_data.get('contact', 'Не указан')}\n"
+            f"⏰ Взята: {req_data.get('taken_at', 'Неизвестно')}",
+            reply_markup=keyboard
+        )
+
+
+async def cancel_request(update_or_query, context, req_data, request_number):
+    """Отказ от заявки"""
+    
+    req_data['status'] = REQUEST_STATUS_CANCELLED
+    logger.info(f"❌ Партнёр @{req_data['taken_by_username']} отказался от заявки №{request_number}")
+    
+    # Обновляем статус в таблице
+    update_request_status(request_number, REQUEST_STATUS_CANCELLED)
+    
+    # Уведомление продающему партнёру
+    try:
+        if req_data.get('user_id'):
+            await context.bot.send_message(
+                chat_id=req_data['user_id'],
+                text=(
+                    f"⚠️ Заявка №{request_number}\n\n"
+                    f"Партнёр @{req_data['taken_by_username']} отказался от заявки.\n\n"
+                    f"📝 Адрес: {req_data['address']}\n"
+                    f"📞 Контакт: {req_data.get('contact', 'Не указан')}\n\n"
+                    f"❌ Отправьте заявку в СВК"
+                )
+            )
+            logger.info(f"✅ Уведомление об отказе отправлено @{req_data['username']}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка уведомления об отказе: {e}")
+    
+    # Уведомление партнёру, который отказался
+    try:
+        await context.bot.send_message(
+            chat_id=req_data['taken_by_id'],
+            text=f"✅ Вы отказались от заявки №{request_number}"
+        )
+    except Exception as e:
+        logger.error(f"❌ Ошибка подтверждения отказа: {e}")
+    
+    # Удаляем кнопку из сообщения в чате
+    try:
+        if req_data.get('message_id'):
+            await context.bot.edit_message_text(
+                chat_id=int(CHAT_ID),
+                message_id=req_data['message_id'],
+                text=f"📦 Заявка №{request_number}\n📝 Адрес: {req_data['address']}\n👤 От: @{req_data['username']}\n\n❌ ОТКАЗ ПАРТНЁРА @{req_data['taken_by_username']}"
+            )
+    except Exception as e:
+        logger.error(f"❌ Ошибка обновления сообщения: {e}")
+
+
+# ========== ФУНКЦИЯ СОЗДАНИЯ APPLICATION ==========
 def create_application():
     """Создание приложения"""
     global application
@@ -765,6 +796,7 @@ def create_application():
     return application
 
 
+# ========== ОСНОВНАЯ ФУНКЦИЯ ==========
 def main():
     """Запуск"""
     print("🚀 Запуск бота...")
