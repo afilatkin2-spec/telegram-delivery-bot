@@ -4,7 +4,6 @@ import logging
 import os
 import sys
 import asyncio
-import requests  # ВАЖНО: добавляем импорт requests
 
 # Настройка логирования
 logging.basicConfig(
@@ -13,6 +12,15 @@ logging.basicConfig(
     stream=sys.stdout
 )
 logger = logging.getLogger(__name__)
+
+# Пытаемся импортировать requests
+try:
+    import requests
+    REQUESTS_AVAILABLE = True
+    logger.info("✅ Библиотека requests успешно импортирована")
+except ImportError:
+    REQUESTS_AVAILABLE = False
+    logger.error("❌ Библиотека requests не установлена. Добавьте 'requests==2.31.0' в requirements.txt")
 
 # Создаем Flask приложение
 app = Flask(__name__)
@@ -32,39 +40,32 @@ except Exception as e:
 # Секретный путь для вебхука
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "pavdanf")
 
-# --- Простая синхронная обработка для надежности ---
+# --- Простая синхронная обработка ---
 
 @app.route('/' + WEBHOOK_SECRET, methods=['POST'])
 def webhook():
-    """Обработчик вебхука (синхронный)"""
+    """Обработчик вебхука"""
     logger.info("📩 Получен POST запрос на webhook")
     
     if request.method != 'POST':
         return jsonify({"error": "Method not allowed"}), 405
     
-    # Проверяем, что бот инициализирован
     if application is None or Update is None:
         logger.error("❌ Бот не инициализирован")
         return jsonify({"error": "Bot not initialized"}), 500
     
     try:
-        # Получаем данные от Telegram
         json_string = request.get_data().decode('utf-8')
-        logger.info(f"📦 Получены данные: {json_string[:100]}...")
+        logger.info(f"📦 Получены данные")
         
-        # Парсим обновление
         update_data = json.loads(json_string)
         update = Update.de_json(update_data, application.bot)
         
-        # Создаем и запускаем асинхронную задачу
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
             loop.run_until_complete(application.process_update(update))
             logger.info("✅ Webhook обработан успешно")
-        except Exception as e:
-            logger.error(f"❌ Ошибка при обработке: {e}")
-            raise
         finally:
             loop.close()
         
@@ -76,57 +77,62 @@ def webhook():
 
 @app.route('/set_webhook', methods=['GET'])
 def set_webhook():
-    """Принудительная установка вебхука через Telegram API"""
+    """Установка вебхука"""
+    if not REQUESTS_AVAILABLE:
+        return jsonify({
+            "error": "Библиотека requests не установлена",
+            "solution": "Добавьте 'requests==2.31.0' в requirements.txt и перезапустите деплой"
+        }), 500
+    
     try:
-        # Получаем текущий URL сервиса
         railway_url = request.host
         webhook_url = f"https://{railway_url}/{WEBHOOK_SECRET}"
         logger.info(f"🔄 Устанавливаем вебхук на: {webhook_url}")
         
-        # Формируем запрос к Telegram API
+        # Прямой запрос к Telegram API
+        import subprocess
+        import urllib.parse
+        
+        # Альтернативный способ без requests
         api_url = f"https://api.telegram.org/bot{TOKEN}/setWebhook"
-        params = {
+        params = urllib.parse.urlencode({
             "url": webhook_url,
-            "allowed_updates": json.dumps(['message', 'callback_query', 'edited_message']),
-            "drop_pending_updates": True,
-            "max_connections": 40
-        }
+            "drop_pending_updates": "true"
+        })
         
-        # Отправляем запрос (синхронно)
-        logger.info(f"📤 Отправляем запрос к Telegram API: {api_url}")
-        response = requests.get(api_url, params=params, timeout=30)
-        result = response.json()
+        # Используем curl если requests не работает
+        cmd = f"curl -s '{api_url}?{params}'"
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         
-        if result.get('ok'):
-            logger.info(f"✅ Вебхук успешно установлен через API")
-            return jsonify({"success": True, "result": result})
-        else:
-            logger.error(f"❌ Ошибка API Telegram: {result}")
-            return jsonify({"error": result}), 400
-            
-    except requests.exceptions.Timeout:
-        logger.error("❌ Таймаут при запросе к Telegram API")
-        return jsonify({"error": "Timeout"}), 500
-    except requests.exceptions.ConnectionError as e:
-        logger.error(f"❌ Ошибка подключения: {e}")
-        return jsonify({"error": f"Connection error: {e}"}), 500
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            if data.get('ok'):
+                logger.info(f"✅ Вебхук установлен")
+                return jsonify({"success": True, "result": data})
+        
+        return jsonify({"error": "Failed to set webhook"}), 400
+        
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/webhook_info', methods=['GET'])
 def webhook_info():
-    """Получение информации о вебхуке через Telegram API"""
+    """Информация о вебхуке"""
     try:
+        # Используем curl для запроса
+        import subprocess
+        import urllib.parse
+        
         api_url = f"https://api.telegram.org/bot{TOKEN}/getWebhookInfo"
-        logger.info(f"📤 Запрос информации о вебхуке")
+        cmd = f"curl -s '{api_url}'"
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         
-        response = requests.get(api_url, timeout=30)
-        result = response.json()
-        
-        logger.info(f"📊 Информация о вебхуке получена")
-        return jsonify(result)
-        
+        if result.returncode == 0:
+            return jsonify(json.loads(result.stdout))
+        else:
+            return jsonify({"error": "Failed to get webhook info"}), 400
+            
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
         return jsonify({"error": str(e)}), 500
@@ -135,15 +141,20 @@ def webhook_info():
 def delete_webhook():
     """Удаление вебхука"""
     try:
+        import subprocess
+        import urllib.parse
+        
         api_url = f"https://api.telegram.org/bot{TOKEN}/deleteWebhook"
-        params = {"drop_pending_updates": True}
+        params = urllib.parse.urlencode({"drop_pending_updates": "true"})
         
-        logger.info(f"🗑 Удаляем вебхук")
-        response = requests.get(api_url, params=params, timeout=30)
-        result = response.json()
+        cmd = f"curl -s '{api_url}?{params}'"
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         
-        return jsonify(result)
-        
+        if result.returncode == 0:
+            return jsonify(json.loads(result.stdout))
+        else:
+            return jsonify({"error": "Failed to delete webhook"}), 400
+            
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
         return jsonify({"error": str(e)}), 500
@@ -151,25 +162,20 @@ def delete_webhook():
 @app.route('/debug')
 def debug():
     """Отладочная информация"""
-    # Проверяем наличие requests
-    requests_available = 'requests' in sys.modules
-    
     return jsonify({
         "bot_imported": 'bot' in sys.modules,
         "application_exists": application is not None,
         "update_exists": Update is not None,
         "webhook_secret": WEBHOOK_SECRET,
-        "requests_available": requests_available,
-        "python_version": sys.version,
-        "requests_version": requests.__version__ if requests_available else "not installed"
+        "requests_available": REQUESTS_AVAILABLE,
+        "python_version": sys.version
     })
 
 @app.route('/')
 def index():
     return jsonify({
         "status": "running",
-        "message": "Telegram bot is running on Railway!",
-        "endpoints": ["/webhook", "/set_webhook", "/webhook_info", "/delete_webhook", "/debug"]
+        "message": "Telegram bot is running on Railway!"
     })
 
 @app.route('/health')
