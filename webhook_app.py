@@ -6,9 +6,9 @@ import sys
 import asyncio
 from functools import wraps
 
-# Настройка логирования
+# Настройка логирования - ИСПРАВЛЕНО: asime -> asctime
 logging.basicConfig(
-    format='%(asime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
     stream=sys.stdout
 )
@@ -161,6 +161,3 @@ def debug():
 if __name__ == '__main__':
     port = int(os.getenv("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
-
-# Для Gunicorn - это важно!
-# Не добавляйте ничего после этого
