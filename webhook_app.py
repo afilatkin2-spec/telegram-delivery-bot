@@ -3,9 +3,8 @@ import json
 import logging
 import os
 import sys
-import asyncio
 
-# Настройка логирования для Railway
+# Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
@@ -15,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Импортируем только то, что реально нужно
+# Импортируем бота
 try:
     from bot import application
     from telegram import Update
@@ -45,23 +44,24 @@ def webhook():
             json_string = request.get_data().decode('utf-8')
             update = Update.de_json(json.loads(json_string), application.bot)
             
-            # Создаем новый event loop для асинхронной обработки
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            # Используем существующий event loop или создаем новый
+            import asyncio
             try:
-                loop.run_until_complete(application.process_update(update))
-            finally:
-                loop.close()
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
             
+            loop.run_until_complete(application.process_update(update))
             return 'OK', 200
         except Exception as e:
             logger.error(f"❌ Ошибка обработки вебхука: {e}")
             return 'Error', 500
     return 'OK', 200
 
-@app.route('/set_webhook')
-async def set_webhook():
-    """Эндпоинт для установки вебхука (вызвать один раз)"""
+@app.route('/set_webhook', methods=['GET'])
+def set_webhook():
+    """Эндпоинт для установки вебхука"""
     try:
         railway_url = os.getenv("RAILWAY_PUBLIC_DOMAIN")
         if not railway_url:
@@ -71,32 +71,22 @@ async def set_webhook():
         webhook_url = f"https://{railway_url}/{WEBHOOK_SECRET}"
         logger.info(f"Устанавливаем вебхук на: {webhook_url}")
         
-        # ВАЖНО: добавляем await
-        success = await application.bot.set_webhook(url=webhook_url)
+        # Синхронная версия без await
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        success = loop.run_until_complete(application.bot.set_webhook(url=webhook_url))
         
         if success:
-            # Проверяем информацию о вебхуке
-            webhook_info = await application.bot.get_webhook_info()
-            logger.info(f"Информация о вебхуке: {webhook_info}")
             return f"✅ Webhook установлен на {webhook_url}", 200
         else:
             return "❌ Ошибка установки вебхука", 400
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
-        return f"❌ Ошибка: {e}", 500
-
-@app.route('/webhook_info')
-async def webhook_info():
-    """Проверка информации о вебхуке"""
-    try:
-        webhook_info = await application.bot.get_webhook_info()
-        return json.dumps({
-            "url": webhook_info.url,
-            "has_custom_certificate": webhook_info.has_custom_certificate,
-            "pending_update_count": webhook_info.pending_update_count,
-            "max_connections": webhook_info.max_connections
-        }), 200
-    except Exception as e:
         return f"❌ Ошибка: {e}", 500
 
 if __name__ == '__main__':
