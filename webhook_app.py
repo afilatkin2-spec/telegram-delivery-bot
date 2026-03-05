@@ -39,15 +39,18 @@ except Exception as e:
 
 # Секретный путь для вебхука
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "pavdanf")
+logger.info(f"🔑 Используется секрет вебхука: {WEBHOOK_SECRET}")
 
 # --- Простая синхронная обработка ---
 
-@app.route('/' + WEBHOOK_SECRET, methods=['POST'])
+# ВАЖНО: Используем f-string для формирования пути
+@app.route(f'/{WEBHOOK_SECRET}', methods=['POST'])
 def webhook():
     """Обработчик вебхука"""
-    logger.info("📩 Получен POST запрос на webhook")
+    logger.info(f"📩 Получен POST запрос на webhook по пути: /{WEBHOOK_SECRET}")
     
     if request.method != 'POST':
+        logger.error(f"❌ Неправильный метод: {request.method}")
         return jsonify({"error": "Method not allowed"}), 405
     
     if application is None or Update is None:
@@ -56,7 +59,7 @@ def webhook():
     
     try:
         json_string = request.get_data().decode('utf-8')
-        logger.info(f"📦 Получены данные")
+        logger.info(f"📦 Получены данные: {json_string[:200]}...")
         
         update_data = json.loads(json_string)
         update = Update.de_json(update_data, application.bot)
@@ -66,11 +69,17 @@ def webhook():
         try:
             loop.run_until_complete(application.process_update(update))
             logger.info("✅ Webhook обработан успешно")
+        except Exception as e:
+            logger.error(f"❌ Ошибка при обработке update: {e}")
+            raise
         finally:
             loop.close()
         
         return 'OK', 200
         
+    except json.JSONDecodeError as e:
+        logger.error(f"❌ Ошибка парсинга JSON: {e}")
+        return jsonify({"error": f"Invalid JSON: {e}"}), 400
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
         return jsonify({"error": str(e)}), 500
@@ -89,29 +98,27 @@ def set_webhook():
         webhook_url = f"https://{railway_url}/{WEBHOOK_SECRET}"
         logger.info(f"🔄 Устанавливаем вебхук на: {webhook_url}")
         
-        # Прямой запрос к Telegram API
-        import subprocess
-        import urllib.parse
-        
-        # Альтернативный способ без requests
+        # Используем requests для запроса
         api_url = f"https://api.telegram.org/bot{TOKEN}/setWebhook"
-        params = urllib.parse.urlencode({
+        params = {
             "url": webhook_url,
-            "drop_pending_updates": "true"
-        })
+            "drop_pending_updates": True,
+            "allowed_updates": json.dumps(['message', 'callback_query', 'edited_message'])
+        }
         
-        # Используем curl если requests не работает
-        cmd = f"curl -s '{api_url}?{params}'"
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        response = requests.get(api_url, params=params, timeout=30)
+        data = response.json()
         
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            if data.get('ok'):
-                logger.info(f"✅ Вебхук установлен")
-                return jsonify({"success": True, "result": data})
+        if data.get('ok'):
+            logger.info(f"✅ Вебхук установлен на {webhook_url}")
+            return jsonify({"success": True, "result": data})
+        else:
+            logger.error(f"❌ Ошибка установки вебхука: {data}")
+            return jsonify({"error": data}), 400
         
-        return jsonify({"error": "Failed to set webhook"}), 400
-        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Ошибка запроса: {e}")
+        return jsonify({"error": str(e)}), 500
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
         return jsonify({"error": str(e)}), 500
@@ -120,19 +127,9 @@ def set_webhook():
 def webhook_info():
     """Информация о вебхуке"""
     try:
-        # Используем curl для запроса
-        import subprocess
-        import urllib.parse
-        
         api_url = f"https://api.telegram.org/bot{TOKEN}/getWebhookInfo"
-        cmd = f"curl -s '{api_url}'"
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        
-        if result.returncode == 0:
-            return jsonify(json.loads(result.stdout))
-        else:
-            return jsonify({"error": "Failed to get webhook info"}), 400
-            
+        response = requests.get(api_url, timeout=30)
+        return jsonify(response.json())
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
         return jsonify({"error": str(e)}), 500
@@ -141,23 +138,28 @@ def webhook_info():
 def delete_webhook():
     """Удаление вебхука"""
     try:
-        import subprocess
-        import urllib.parse
-        
         api_url = f"https://api.telegram.org/bot{TOKEN}/deleteWebhook"
-        params = urllib.parse.urlencode({"drop_pending_updates": "true"})
-        
-        cmd = f"curl -s '{api_url}?{params}'"
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        
-        if result.returncode == 0:
-            return jsonify(json.loads(result.stdout))
-        else:
-            return jsonify({"error": "Failed to delete webhook"}), 400
-            
+        params = {"drop_pending_updates": True}
+        response = requests.get(api_url, params=params, timeout=30)
+        return jsonify(response.json())
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
         return jsonify({"error": str(e)}), 500
+
+@app.route('/test_webhook', methods=['GET', 'POST'])
+def test_webhook():
+    """Тестовый эндпоинт для проверки"""
+    if request.method == 'POST':
+        return jsonify({
+            "method": "POST",
+            "data": request.get_data().decode('utf-8'),
+            "headers": dict(request.headers)
+        })
+    return jsonify({
+        "method": "GET",
+        "message": "Send POST request to test webhook",
+        "webhook_url": f"/{WEBHOOK_SECRET}"
+    })
 
 @app.route('/debug')
 def debug():
@@ -167,15 +169,18 @@ def debug():
         "application_exists": application is not None,
         "update_exists": Update is not None,
         "webhook_secret": WEBHOOK_SECRET,
+        "webhook_path": f"/{WEBHOOK_SECRET}",
         "requests_available": REQUESTS_AVAILABLE,
-        "python_version": sys.version
+        "python_version": sys.version,
+        "routes": [str(rule) for rule in app.url_map.iter_rules()]
     })
 
 @app.route('/')
 def index():
     return jsonify({
         "status": "running",
-        "message": "Telegram bot is running on Railway!"
+        "message": "Telegram bot is running on Railway!",
+        "webhook_path": f"/{WEBHOOK_SECRET}"
     })
 
 @app.route('/health')
