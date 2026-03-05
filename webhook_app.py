@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import asyncio
+import traceback
 
 # Настройка логирования
 logging.basicConfig(
@@ -20,12 +21,12 @@ try:
     logger.info("✅ Библиотека requests успешно импортирована")
 except ImportError:
     REQUESTS_AVAILABLE = False
-    logger.error("❌ Библиотека requests не установлена. Добавьте 'requests==2.31.0' в requirements.txt")
+    logger.error("❌ Библиотека requests не установлена")
 
 # Создаем Flask приложение
 app = Flask(__name__)
 
-# Глобальный event loop (один на всё приложение)
+# Глобальный event loop
 loop = None
 
 def get_loop():
@@ -41,11 +42,11 @@ def get_loop():
         asyncio.set_event_loop(loop)
     return loop
 
-# Инициализируем loop при старте
+# Инициализируем loop
 get_loop()
 logger.info("✅ Event loop инициализирован")
 
-# Импортируем бота и необходимые классы
+# Импортируем бота
 try:
     import bot
     from telegram import Update
@@ -65,22 +66,23 @@ logger.info(f"🔑 Используется секрет вебхука: {WEBHOO
 _initialized = False
 
 async def ensure_initialized():
-    """Гарантирует, что application инициализирован"""
+    """Инициализация application"""
     global _initialized
     if not _initialized and application:
-        await application.initialize()
-        _initialized = True
-        logger.info("✅ Application инициализирован")
-
-# --- Обработка вебхука с постоянным loop ---
+        try:
+            await application.initialize()
+            _initialized = True
+            logger.info("✅ Application инициализирован")
+        except Exception as e:
+            logger.error(f"❌ Ошибка инициализации: {e}")
+            raise
 
 @app.route(f'/{WEBHOOK_SECRET}', methods=['POST'])
 def webhook():
     """Обработчик вебхука"""
-    logger.info(f"📩 Получен POST запрос на webhook по пути: /{WEBHOOK_SECRET}")
+    logger.info(f"📩 Получен POST запрос на webhook")
     
     if request.method != 'POST':
-        logger.error(f"❌ Неправильный метод: {request.method}")
         return jsonify({"error": "Method not allowed"}), 405
     
     if application is None or Update is None:
@@ -89,52 +91,51 @@ def webhook():
     
     try:
         json_string = request.get_data().decode('utf-8')
-        logger.info(f"📦 Получены данные")
+        logger.info(f"📦 Получены данные: {json_string[:200]}...")
         
         update_data = json.loads(json_string)
         update = Update.de_json(update_data, application.bot)
         
-        # Используем глобальный loop, НЕ закрываем его
         global loop
         if loop.is_closed():
             loop = get_loop()
         
-        # Сначала инициализируем
+        # Инициализируем с таймаутом 10 секунд
         future_init = asyncio.run_coroutine_threadsafe(ensure_initialized(), loop)
-        future_init.result(timeout=5)
+        try:
+            future_init.result(timeout=10)
+        except asyncio.TimeoutError:
+            logger.error("❌ Таймаут инициализации")
+            return jsonify({"error": "Init timeout"}), 500
         
-        # Затем обрабатываем update
+        # Обрабатываем update с таймаутом 30 секунд
         future = asyncio.run_coroutine_threadsafe(application.process_update(update), loop)
-        future.result(timeout=30)  # Ждем до 30 секунд
-        
-        logger.info("✅ Webhook обработан успешно")
-        return 'OK', 200
+        try:
+            future.result(timeout=30)
+            logger.info("✅ Webhook обработан успешно")
+            return 'OK', 200
+        except asyncio.TimeoutError:
+            logger.error("❌ Таймаут обработки")
+            return jsonify({"error": "Processing timeout"}), 500
         
     except json.JSONDecodeError as e:
         logger.error(f"❌ Ошибка парсинга JSON: {e}")
         return jsonify({"error": f"Invalid JSON: {e}"}), 400
-    except asyncio.TimeoutError:
-        logger.error("❌ Таймаут обработки")
-        return jsonify({"error": "Processing timeout"}), 500
     except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
+        logger.error(f"❌ Ошибка: {e}\n{traceback.format_exc()}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/set_webhook', methods=['GET'])
 def set_webhook():
     """Установка вебхука"""
     if not REQUESTS_AVAILABLE:
-        return jsonify({
-            "error": "Библиотека requests не установлена",
-            "solution": "Добавьте 'requests==2.31.0' в requirements.txt"
-        }), 500
+        return jsonify({"error": "requests not installed"}), 500
     
     try:
         railway_url = request.host
         webhook_url = f"https://{railway_url}/{WEBHOOK_SECRET}"
         logger.info(f"🔄 Устанавливаем вебхук на: {webhook_url}")
         
-        # Используем requests для запроса (синхронно, без asyncio)
         api_url = f"https://api.telegram.org/bot{TOKEN}/setWebhook"
         params = {
             "url": webhook_url,
@@ -146,94 +147,28 @@ def set_webhook():
         data = response.json()
         
         if data.get('ok'):
-            logger.info(f"✅ Вебхук установлен на {webhook_url}")
+            logger.info(f"✅ Вебхук установлен")
             return jsonify({"success": True, "result": data})
         else:
-            logger.error(f"❌ Ошибка установки вебхука: {data}")
             return jsonify({"error": data}), 400
         
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route('/init', methods=['GET'])
-def force_init():
-    """Принудительная инициализация"""
-    global loop, _initialized
-    try:
-        if loop.is_closed():
-            loop = get_loop()
-        
-        future = asyncio.run_coroutine_threadsafe(ensure_initialized(), loop)
-        future.result(timeout=10)
-        
-        return jsonify({
-            "success": True,
-            "initialized": _initialized,
-            "application_exists": application is not None
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/webhook_info', methods=['GET'])
-def webhook_info():
-    """Информация о вебхуке"""
-    try:
-        api_url = f"https://api.telegram.org/bot{TOKEN}/getWebhookInfo"
-        response = requests.get(api_url, timeout=30)
-        return jsonify(response.json())
-    except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/delete_webhook', methods=['GET'])
-def delete_webhook():
-    """Удаление вебхука"""
-    try:
-        api_url = f"https://api.telegram.org/bot{TOKEN}/deleteWebhook"
-        params = {"drop_pending_updates": True}
-        response = requests.get(api_url, params=params, timeout=30)
-        return jsonify(response.json())
-    except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/test', methods=['GET'])
-def test():
-    """Тестовый эндпоинт"""
-    return jsonify({
-        "status": "ok",
-        "message": "Test endpoint works",
-        "loop_closed": loop.is_closed() if loop else None
-    })
-
 @app.route('/debug')
 def debug():
     """Отладочная информация"""
     return jsonify({
-        "bot_imported": 'bot' in sys.modules,
-        "application_exists": application is not None,
-        "update_exists": Update is not None,
-        "webhook_secret": WEBHOOK_SECRET,
-        "webhook_path": f"/{WEBHOOK_SECRET}",
-        "requests_available": REQUESTS_AVAILABLE,
         "initialized": _initialized,
-        "loop_exists": loop is not None,
         "loop_closed": loop.is_closed() if loop else None,
-        "python_version": sys.version
+        "application_exists": application is not None,
+        "webhook_secret": WEBHOOK_SECRET
     })
 
 @app.route('/')
 def index():
-    return jsonify({
-        "status": "running",
-        "message": "Telegram bot is running on Railway!",
-        "webhook_path": f"/{WEBHOOK_SECRET}"
-    })
-
-@app.route('/health')
-def health():
-    return jsonify({"status": "healthy"})
+    return jsonify({"status": "running"})
 
 if __name__ == '__main__':
     port = int(os.getenv("PORT", 8080))
