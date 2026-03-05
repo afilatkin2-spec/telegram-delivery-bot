@@ -8,12 +8,13 @@ from functools import wraps
 
 # Настройка логирования
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
     stream=sys.stdout
 )
 logger = logging.getLogger(__name__)
 
+# Создаем Flask приложение
 app = Flask(__name__)
 
 # Глобальный event loop
@@ -36,27 +37,20 @@ def init_loop():
 # Инициализируем loop
 init_loop()
 
-# Импортируем всё необходимое из bot.py
+# Импортируем бота ПОСЛЕ создания app
 try:
-    # Сначала импортируем сам модуль bot
     import bot
+    from telegram import Update
     
-    # Затем получаем нужные объекты
+    # Получаем application из bot
     application = bot.application
     TOKEN = bot.TOKEN
-    logger.info("✅ Бот успешно импортирован из bot.py")
     
-    # Импортируем Update отдельно
-    from telegram import Update
+    logger.info("✅ Бот успешно импортирован из bot.py")
     logger.info("✅ Update успешно импортирован из telegram")
     
-except ImportError as e:
+except Exception as e:
     logger.error(f"❌ Ошибка при импорте: {e}")
-    application = None
-    Update = None
-    
-except AttributeError as e:
-    logger.error(f"❌ Ошибка доступа к атрибуту: {e}")
     application = None
     Update = None
 
@@ -98,7 +92,6 @@ async def webhook():
             json_string = request.get_data().decode('utf-8')
             logger.info(f"📩 Получен webhook: {json_string[:100]}...")
             
-            # Проверяем наличие необходимых объектов
             if application is None:
                 logger.error("❌ application не инициализирован")
                 return 'Error: application not initialized', 500
@@ -107,10 +100,7 @@ async def webhook():
                 logger.error("❌ Update не импортирован")
                 return 'Error: Update not imported', 500
             
-            # Создаем update объект
             update = Update.de_json(json.loads(json_string), application.bot)
-            
-            # Обрабатываем обновление
             await application.process_update(update)
             logger.info("✅ Webhook обработан успешно")
             
@@ -141,7 +131,7 @@ async def set_webhook():
         # Устанавливаем новый
         success = await application.bot.set_webhook(
             url=webhook_url,
-            allowed_updates=['message', 'callback_query', 'edited_message', 'channel_post']
+            allowed_updates=['message', 'callback_query', 'edited_message']
         )
         
         if success:
@@ -167,6 +157,10 @@ def debug():
     }
     return json.dumps(info), 200
 
+# Для локального запуска
 if __name__ == '__main__':
     port = int(os.getenv("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
+
+# Для Gunicorn - это важно!
+# Не добавляйте ничего после этого
