@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import sys
+import asyncio
 
 # Настройка логирования
 logging.basicConfig(
@@ -25,6 +26,17 @@ except Exception as e:
 # Секретный путь для вебхука
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "telegram-webhook-secret")
 
+# Флаг для отслеживания инициализации
+_initialized = False
+
+async def ensure_initialized():
+    """Гарантирует, что application инициализирован"""
+    global _initialized
+    if not _initialized and application:
+        await application.initialize()
+        _initialized = True
+        logger.info("✅ Application инициализирован")
+
 @app.route('/')
 def index():
     return json.dumps({
@@ -44,15 +56,18 @@ def webhook():
             json_string = request.get_data().decode('utf-8')
             update = Update.de_json(json.loads(json_string), application.bot)
             
-            # Используем существующий event loop или создаем новый
-            import asyncio
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+            # Создаем event loop для асинхронных операций
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             
-            loop.run_until_complete(application.process_update(update))
+            try:
+                # Сначала инициализируем, если нужно
+                loop.run_until_complete(ensure_initialized())
+                # Затем обрабатываем обновление
+                loop.run_until_complete(application.process_update(update))
+            finally:
+                loop.close()
+            
             return 'OK', 200
         except Exception as e:
             logger.error(f"❌ Ошибка обработки вебхука: {e}")
@@ -71,20 +86,47 @@ def set_webhook():
         webhook_url = f"https://{railway_url}/{WEBHOOK_SECRET}"
         logger.info(f"Устанавливаем вебхук на: {webhook_url}")
         
-        # Синхронная версия без await
-        import asyncio
+        # Создаем event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
         try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            # Инициализируем application
+            loop.run_until_complete(ensure_initialized())
+            # Устанавливаем вебхук
+            success = loop.run_until_complete(application.bot.set_webhook(url=webhook_url))
+            
+            if success:
+                return f"✅ Webhook установлен на {webhook_url}", 200
+            else:
+                return "❌ Ошибка установки вебхука", 400
+        finally:
+            loop.close()
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка: {e}")
+        return f"❌ Ошибка: {e}", 500
+
+@app.route('/webhook_info', methods=['GET'])
+def webhook_info():
+    """Проверка информации о вебхуке"""
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         
-        success = loop.run_until_complete(application.bot.set_webhook(url=webhook_url))
-        
-        if success:
-            return f"✅ Webhook установлен на {webhook_url}", 200
-        else:
-            return "❌ Ошибка установки вебхука", 400
+        try:
+            loop.run_until_complete(ensure_initialized())
+            info = loop.run_until_complete(application.bot.get_webhook_info())
+            
+            return json.dumps({
+                "url": info.url,
+                "has_custom_certificate": info.has_custom_certificate,
+                "pending_update_count": info.pending_update_count,
+                "max_connections": info.max_connections
+            }), 200
+        finally:
+            loop.close()
+            
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
         return f"❌ Ошибка: {e}", 500
