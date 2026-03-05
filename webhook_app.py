@@ -5,8 +5,9 @@ import os
 import sys
 import asyncio
 import traceback
+import time
 
-# Настройка логирования - ИСПРАВЛЕНО: asime -> asctime
+# Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
@@ -76,6 +77,7 @@ if application:
 @app.route(f'/{WEBHOOK_SECRET}', methods=['POST'])
 def webhook():
     """Обработчик вебхука"""
+    start_time = time.time()
     logger.info("📩 Получен POST запрос на webhook")
     
     # Проверяем базовые условия
@@ -89,27 +91,34 @@ def webhook():
     try:
         # Получаем данные
         json_string = request.get_data().decode('utf-8')
-        logger.info(f"📦 Получены данные от пользователя")
+        logger.info(f"📦 Получены данные от пользователя (первые 100 символов): {json_string[:100]}...")
         
         # Парсим update
+        parse_start = time.time()
         update_data = json.loads(json_string)
         update = Update.de_json(update_data, application.bot)
+        logger.info(f"✅ JSON распарсен за {time.time() - parse_start:.2f} сек")
         
         # Используем глобальный loop
         global loop
         if loop.is_closed():
+            logger.warning("⚠️ Loop был закрыт, создаем новый")
             loop = init_loop()
         
-        # Обрабатываем update
+        # Обрабатываем update с увеличенным таймаутом
+        process_start = time.time()
         future = asyncio.run_coroutine_threadsafe(application.process_update(update), loop)
-        future.result(timeout=30)  # Ждем до 30 секунд
         
-        logger.info("✅ Webhook обработан успешно")
-        return 'OK', 200
+        try:
+            future.result(timeout=60)  # Увеличили до 60 секунд
+            logger.info(f"✅ Webhook обработан успешно за {time.time() - process_start:.2f} сек")
+            logger.info(f"⏱️ Общее время обработки: {time.time() - start_time:.2f} сек")
+            return 'OK', 200
+        except asyncio.TimeoutError:
+            logger.error(f"❌ Таймаут обработки после {time.time() - process_start:.2f} сек")
+            # Не закрываем future, пусть продолжает работу в фоне
+            return jsonify({"error": "Processing timeout"}), 500
         
-    except asyncio.TimeoutError:
-        logger.error("❌ Таймаут обработки")
-        return jsonify({"error": "Processing timeout"}), 500
     except json.JSONDecodeError as e:
         logger.error(f"❌ Ошибка парсинга JSON: {e}")
         return jsonify({"error": f"Invalid JSON: {e}"}), 400
