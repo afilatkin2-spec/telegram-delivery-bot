@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Глобальный event loop (один на всё приложение)
+# Глобальный event loop
 loop = None
 
 def init_loop():
@@ -33,16 +33,30 @@ def init_loop():
     logger.info("✅ Event loop инициализирован")
     return loop
 
-# Инициализируем loop сразу при загрузке
+# Инициализируем loop
 init_loop()
 
-# Импортируем бота и нужные классы
+# Импортируем всё необходимое из bot.py
 try:
-    from bot import application
+    # Сначала импортируем сам модуль bot
+    import bot
+    
+    # Затем получаем нужные объекты
+    application = bot.application
+    TOKEN = bot.TOKEN
+    logger.info("✅ Бот успешно импортирован из bot.py")
+    
+    # Импортируем Update отдельно
     from telegram import Update
-    logger.info("✅ Бот и Update успешно импортированы")
-except Exception as e:
+    logger.info("✅ Update успешно импортирован из telegram")
+    
+except ImportError as e:
     logger.error(f"❌ Ошибка при импорте: {e}")
+    application = None
+    Update = None
+    
+except AttributeError as e:
+    logger.error(f"❌ Ошибка доступа к атрибуту: {e}")
     application = None
     Update = None
 
@@ -55,11 +69,9 @@ def async_route(f):
     def wrapper(*args, **kwargs):
         global loop
         try:
-            # Проверяем, что loop жив
             if loop.is_closed():
                 logger.warning("⚠️ Loop был закрыт, создаем новый")
                 loop = init_loop()
-            # Запускаем асинхронную функцию в нашем loop
             return loop.run_until_complete(f(*args, **kwargs))
         except Exception as e:
             logger.error(f"❌ Ошибка: {e}")
@@ -84,17 +96,23 @@ async def webhook():
     if request.method == 'POST':
         try:
             json_string = request.get_data().decode('utf-8')
-            logger.info(f"Получен webhook: {json_string[:200]}...")
+            logger.info(f"📩 Получен webhook: {json_string[:100]}...")
             
-            # Проверяем, что Update импортирован
+            # Проверяем наличие необходимых объектов
+            if application is None:
+                logger.error("❌ application не инициализирован")
+                return 'Error: application not initialized', 500
+            
             if Update is None:
                 logger.error("❌ Update не импортирован")
                 return 'Error: Update not imported', 500
             
+            # Создаем update объект
             update = Update.de_json(json.loads(json_string), application.bot)
             
             # Обрабатываем обновление
             await application.process_update(update)
+            logger.info("✅ Webhook обработан успешно")
             
             return 'OK', 200
         except Exception as e:
@@ -105,31 +123,30 @@ async def webhook():
 @app.route('/set_webhook', methods=['GET'])
 @async_route
 async def set_webhook():
-    """Эндпоинт для установки вебхука"""
+    """Установка вебхука"""
     try:
+        if application is None:
+            return "❌ application не инициализирован", 500
+        
         railway_url = os.getenv("RAILWAY_PUBLIC_DOMAIN")
         if not railway_url:
             railway_url = request.host
-            logger.info(f"Домен из запроса: {railway_url}")
         
         webhook_url = f"https://{railway_url}/{WEBHOOK_SECRET}"
-        logger.info(f"Устанавливаем вебхук на: {webhook_url}")
+        logger.info(f"🔄 Устанавливаем вебхук на: {webhook_url}")
         
-        # Проверяем, что application существует
-        if application is None:
-            logger.error("❌ application не импортирован")
-            return "❌ application не импортирован", 500
+        # Удаляем старый вебхук
+        await application.bot.delete_webhook()
         
-        # Устанавливаем вебхук
+        # Устанавливаем новый
         success = await application.bot.set_webhook(
             url=webhook_url,
-            allowed_updates=['message', 'callback_query', 'edited_message']
+            allowed_updates=['message', 'callback_query', 'edited_message', 'channel_post']
         )
         
         if success:
-            # Получаем информацию о вебхуке
-            webhook_info = await application.bot.get_webhook_info()
-            logger.info(f"✅ Webhook info: {webhook_info}")
+            info = await application.bot.get_webhook_info()
+            logger.info(f"✅ Webhook установлен: {info}")
             return f"✅ Webhook установлен на {webhook_url}", 200
         else:
             return "❌ Ошибка установки вебхука", 400
@@ -137,46 +154,18 @@ async def set_webhook():
         logger.error(f"❌ Ошибка: {e}")
         return f"❌ Ошибка: {e}", 500
 
-@app.route('/webhook_info', methods=['GET'])
-@async_route
-async def webhook_info():
-    """Информация о вебхуке"""
-    try:
-        if application is None:
-            return "❌ application не импортирован", 500
-        
-        info = await application.bot.get_webhook_info()
-        return json.dumps({
-            "url": info.url,
-            "has_custom_certificate": info.has_custom_certificate,
-            "pending_update_count": info.pending_update_count,
-            "max_connections": info.max_connections,
-            "allowed_updates": info.allowed_updates
-        }), 200
-    except Exception as e:
-        return f"❌ Ошибка: {e}", 500
-
-@app.route('/reset', methods=['GET'])
-@async_route
-async def reset():
-    """Сброс вебхука"""
-    try:
-        if application is None:
-            return "❌ application не импортирован", 500
-        
-        await application.bot.delete_webhook()
-        return "✅ Webhook удален", 200
-    except Exception as e:
-        return f"❌ Ошибка: {e}", 500
-
-@app.route('/loop_status', methods=['GET'])
-def loop_status():
-    """Проверка статуса loop"""
-    global loop
-    return json.dumps({
+@app.route('/debug', methods=['GET'])
+def debug():
+    """Отладочная информация"""
+    info = {
+        "application_exists": application is not None,
+        "update_exists": Update is not None,
         "loop_exists": loop is not None,
-        "loop_closed": loop.is_closed() if loop else None
-    }), 200
+        "loop_closed": loop.is_closed() if loop else None,
+        "webhook_secret": WEBHOOK_SECRET,
+        "bot_imported": 'bot' in sys.modules
+    }
+    return json.dumps(info), 200
 
 if __name__ == '__main__':
     port = int(os.getenv("PORT", 8080))
