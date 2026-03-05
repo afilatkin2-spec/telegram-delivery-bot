@@ -41,9 +41,19 @@ except Exception as e:
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "pavdanf")
 logger.info(f"🔑 Используется секрет вебхука: {WEBHOOK_SECRET}")
 
+# Флаг инициализации
+_initialized = False
+
+async def ensure_initialized():
+    """Гарантирует, что application инициализирован"""
+    global _initialized
+    if not _initialized and application:
+        await application.initialize()
+        _initialized = True
+        logger.info("✅ Application инициализирован")
+
 # --- Простая синхронная обработка ---
 
-# ВАЖНО: Используем f-string для формирования пути
 @app.route(f'/{WEBHOOK_SECRET}', methods=['POST'])
 def webhook():
     """Обработчик вебхука"""
@@ -64,9 +74,13 @@ def webhook():
         update_data = json.loads(json_string)
         update = Update.de_json(update_data, application.bot)
         
+        # Создаем и запускаем асинхронную задачу
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
+            # Сначала инициализируем application
+            loop.run_until_complete(ensure_initialized())
+            # Затем обрабатываем update
             loop.run_until_complete(application.process_update(update))
             logger.info("✅ Webhook обработан успешно")
         except Exception as e:
@@ -97,6 +111,14 @@ def set_webhook():
         railway_url = request.host
         webhook_url = f"https://{railway_url}/{WEBHOOK_SECRET}"
         logger.info(f"🔄 Устанавливаем вебхук на: {webhook_url}")
+        
+        # Инициализируем application перед установкой вебхука
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(ensure_initialized())
+        finally:
+            loop.close()
         
         # Используем requests для запроса
         api_url = f"https://api.telegram.org/bot{TOKEN}/setWebhook"
@@ -146,6 +168,25 @@ def delete_webhook():
         logger.error(f"❌ Ошибка: {e}")
         return jsonify({"error": str(e)}), 500
 
+@app.route('/init', methods=['GET'])
+def force_init():
+    """Принудительная инициализация"""
+    global _initialized
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(ensure_initialized())
+            return jsonify({
+                "success": True,
+                "initialized": _initialized,
+                "application_exists": application is not None
+            })
+        finally:
+            loop.close()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/test_webhook', methods=['GET', 'POST'])
 def test_webhook():
     """Тестовый эндпоинт для проверки"""
@@ -171,6 +212,7 @@ def debug():
         "webhook_secret": WEBHOOK_SECRET,
         "webhook_path": f"/{WEBHOOK_SECRET}",
         "requests_available": REQUESTS_AVAILABLE,
+        "initialized": _initialized,
         "python_version": sys.version,
         "routes": [str(rule) for rule in app.url_map.iter_rules()]
     })
