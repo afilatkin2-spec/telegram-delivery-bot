@@ -421,7 +421,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_requests[request_number]['message_id'] = sent_message.message_id
     logger.info(f"   Сообщение в чат отправлено, ID: {sent_message.message_id}")
     
-    # Подтверждение пользователю - ИСПРАВЛЕНО: 30 минут -> 10 минут
+    # Подтверждение пользователю
     await update.message.reply_text(
         f"✅ Заявка №{request_number} отправлена, с вами свяжется партнёр.\n"
         f"Контакт клиента сохранён: {user_contact}\n\n"
@@ -501,7 +501,8 @@ async def handle_partner_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(
             "ℹ️ Чтобы забрать заявку:\n"
             "• Нажмите кнопку «✅ Забрать заявку» под сообщением\n"
-            "• Или ответьте на сообщение с заявкой\n\n"
+            "• Или ответьте на сообщение с заявкой\n"
+            "• Или используйте команду /take <номер>\n\n"
             "📋 Для просмотра активных заявок используйте /status"
         )
         logger.info("=" * 60)
@@ -588,14 +589,14 @@ async def accept_request(update_or_query, context, req_data, request_number, par
 
 
 async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /accept - альтернативный способ принять заявку"""
+    """Команда /accept - альтернативный способ принять заявку (только в личке)"""
     target_chat_id = int(CHAT_ID)
     
     # Проверяем, что это личное сообщение, а не чат партнеров
     if update.effective_chat.id == target_chat_id:
         # В чате партнеров команда /accept не работает
         await update.message.reply_text(
-            "❌ В этом чате доступна только команда /status"
+            "❌ В этом чате используйте /take <номер> для принятия заявки"
         )
         return
     
@@ -615,6 +616,47 @@ async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if request_number in user_requests and user_requests[request_number]['status'] == 'new':
         req_data = user_requests[request_number]
         await accept_request(update, context, req_data, request_number, partner, partner_username, partner_full_name, target_chat_id)
+    else:
+        await update.message.reply_text(
+            f"❌ Заявка №{request_number} не найдена или уже взята"
+        )
+
+
+async def take_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /take - принять заявку по номеру прямо из чата (НОВАЯ КОМАНДА)"""
+    target_chat_id = int(CHAT_ID)
+    
+    # Проверяем, что команда из чата партнеров
+    if update.effective_chat.id != target_chat_id:
+        await update.message.reply_text(
+            "❌ Команда /take доступна только в чате партнеров"
+        )
+        return
+    
+    # Проверяем наличие номера заявки
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text(
+            "❌ Использование: /take <номер_заявки>\n"
+            "Пример: /take 1\n\n"
+            "📋 Список активных заявок можно посмотреть через /status"
+        )
+        return
+    
+    request_number = int(context.args[0])
+    partner = update.effective_user
+    partner_username = partner.username or f"user_{partner.id}"
+    partner_full_name = partner.full_name or partner_username
+    
+    # Ищем заявку
+    if request_number in user_requests and user_requests[request_number]['status'] == 'new':
+        req_data = user_requests[request_number]
+        
+        # Принимаем заявку
+        await accept_request(update, context, req_data, request_number, partner, 
+                           partner_username, partner_full_name, target_chat_id)
+        
+        logger.info(f"✅ Заявка №{request_number} принята через /take партнером @{partner_username}")
+        
     else:
         await update.message.reply_text(
             f"❌ Заявка №{request_number} не найдена или уже взята"
@@ -661,6 +703,7 @@ def create_application():
     # 1. Команды
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("accept", accept_command))
+    application.add_handler(CommandHandler("take", take_command))  # НОВАЯ КОМАНДА
     application.add_handler(CommandHandler("status", status_command))
     
     # 2. Обработчик инструкции
@@ -713,7 +756,7 @@ def main():
         logger.info("✅ Бот инициализирован")
         print("🚀 Бот запущен! Нажмите Ctrl+C для остановки")
         print("📊 Маршрутизация:")
-        print(f"   • Чат партнеров (ID: {int(CHAT_ID)}) → только /status и ответы на заявки")
+        print(f"   • Чат партнеров (ID: {int(CHAT_ID)}) → /status, /take и ответы на заявки")
         print("   • Личные сообщения → все функции")
         print("   • Inline-кнопки → handle_callback")
         print("   • Данные сохраняются в лист 'Отчётность' с контактом клиента")
