@@ -6,9 +6,9 @@ import sys
 import asyncio
 import traceback
 
-# Настройка логирования
+# Настройка логирования - ИСПРАВЛЕНО: asime -> asctime
 logging.basicConfig(
-    format='%(asime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
     stream=sys.stdout
 )
@@ -89,7 +89,7 @@ def webhook():
     try:
         # Получаем данные
         json_string = request.get_data().decode('utf-8')
-        logger.info(f"📦 Получены данные от пользователя {json_string.find('username')}")
+        logger.info(f"📦 Получены данные от пользователя")
         
         # Парсим update
         update_data = json.loads(json_string)
