@@ -3,7 +3,6 @@ import json
 import logging
 import os
 import sys
-from bot import main as bot_main, TOKEN, init_google_sheets, logger
 
 # Настройка логирования для Railway
 logging.basicConfig(
@@ -11,18 +10,15 @@ logging.basicConfig(
     level=logging.INFO,
     stream=sys.stdout
 )
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Импортируем bot.py после настройки логирования
-try:
-    from telegram import Update
-    from bot import application, TOKEN
-    logger.info("✅ Бот успешно импортирован")
-except Exception as e:
-    logger.error(f"❌ Ошибка импорта бота: {e}")
+# Импортируем только то, что реально нужно
+from bot import application
+from telegram import Update
 
-# Секретный путь для вебхука (можно изменить на любой)
+# Секретный путь для вебхука
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "telegram-webhook-secret")
 
 @app.route('/')
@@ -69,6 +65,5 @@ def set_webhook():
         return f"❌ Ошибка: {e}", 500
 
 if __name__ == '__main__':
-    # Запуск Flask приложения
     port = int(os.getenv("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
