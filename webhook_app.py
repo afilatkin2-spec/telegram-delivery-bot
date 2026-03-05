@@ -8,7 +8,7 @@ from functools import wraps
 
 # Настройка логирования
 logging.basicConfig(
-    format='%(asime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
     stream=sys.stdout
 )
@@ -36,23 +36,15 @@ def init_loop():
 # Инициализируем loop сразу при загрузке
 init_loop()
 
-# Импортируем бота
+# Импортируем бота и нужные классы
 try:
-    from bot import create_application
+    from bot import application
     from telegram import Update
-    
-    logger.info("🔄 Создаем и инициализируем application...")
-    
-    # Создаем application
-    application = create_application()
-    
-    # Инициализируем application в нашем loop
-    loop.run_until_complete(application.initialize())
-    logger.info("✅ Application успешно создан и инициализирован")
-    
+    logger.info("✅ Бот и Update успешно импортированы")
 except Exception as e:
-    logger.error(f"❌ Ошибка при создании application: {e}")
+    logger.error(f"❌ Ошибка при импорте: {e}")
     application = None
+    Update = None
 
 # Секретный путь для вебхука
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "telegram-webhook-secret")
@@ -90,55 +82,92 @@ def health():
 async def webhook():
     """Основной эндпоинт для вебхуков Telegram"""
     if request.method == 'POST':
-        json_string = request.get_data().decode('utf-8')
-        update = Update.de_json(json.loads(json_string), application.bot)
-        
-        # Обрабатываем обновление
-        await application.process_update(update)
-        
-        return 'OK', 200
+        try:
+            json_string = request.get_data().decode('utf-8')
+            logger.info(f"Получен webhook: {json_string[:200]}...")
+            
+            # Проверяем, что Update импортирован
+            if Update is None:
+                logger.error("❌ Update не импортирован")
+                return 'Error: Update not imported', 500
+            
+            update = Update.de_json(json.loads(json_string), application.bot)
+            
+            # Обрабатываем обновление
+            await application.process_update(update)
+            
+            return 'OK', 200
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки вебхука: {e}")
+            return f'Error: {e}', 500
     return 'OK', 200
 
 @app.route('/set_webhook', methods=['GET'])
 @async_route
 async def set_webhook():
     """Эндпоинт для установки вебхука"""
-    railway_url = os.getenv("RAILWAY_PUBLIC_DOMAIN")
-    if not railway_url:
-        railway_url = request.host
-        logger.info(f"Домен из запроса: {railway_url}")
-    
-    webhook_url = f"https://{railway_url}/{WEBHOOK_SECRET}"
-    logger.info(f"Устанавливаем вебхук на: {webhook_url}")
-    
-    # Устанавливаем вебхук
-    success = await application.bot.set_webhook(
-        url=webhook_url,
-        allowed_updates=['message', 'callback_query']
-    )
-    
-    if success:
-        # Получаем информацию о вебхуке
-        webhook_info = await application.bot.get_webhook_info()
-        logger.info(f"✅ Webhook info: {webhook_info}")
+    try:
+        railway_url = os.getenv("RAILWAY_PUBLIC_DOMAIN")
+        if not railway_url:
+            railway_url = request.host
+            logger.info(f"Домен из запроса: {railway_url}")
         
-        # Также устанавливаем команды для меню
-        await application.bot.set_my_commands([
-            ('start', 'Запустить бота'),
-            ('status', 'Показать активные заявки')
-        ])
+        webhook_url = f"https://{railway_url}/{WEBHOOK_SECRET}"
+        logger.info(f"Устанавливаем вебхук на: {webhook_url}")
         
-        return f"✅ Webhook установлен на {webhook_url}", 200
-    else:
-        return "❌ Ошибка установки вебхука", 400
+        # Проверяем, что application существует
+        if application is None:
+            logger.error("❌ application не импортирован")
+            return "❌ application не импортирован", 500
+        
+        # Устанавливаем вебхук
+        success = await application.bot.set_webhook(
+            url=webhook_url,
+            allowed_updates=['message', 'callback_query', 'edited_message']
+        )
+        
+        if success:
+            # Получаем информацию о вебхуке
+            webhook_info = await application.bot.get_webhook_info()
+            logger.info(f"✅ Webhook info: {webhook_info}")
+            return f"✅ Webhook установлен на {webhook_url}", 200
+        else:
+            return "❌ Ошибка установки вебхука", 400
+    except Exception as e:
+        logger.error(f"❌ Ошибка: {e}")
+        return f"❌ Ошибка: {e}", 500
+
+@app.route('/webhook_info', methods=['GET'])
+@async_route
+async def webhook_info():
+    """Информация о вебхуке"""
+    try:
+        if application is None:
+            return "❌ application не импортирован", 500
+        
+        info = await application.bot.get_webhook_info()
+        return json.dumps({
+            "url": info.url,
+            "has_custom_certificate": info.has_custom_certificate,
+            "pending_update_count": info.pending_update_count,
+            "max_connections": info.max_connections,
+            "allowed_updates": info.allowed_updates
+        }), 200
+    except Exception as e:
+        return f"❌ Ошибка: {e}", 500
 
 @app.route('/reset', methods=['GET'])
 @async_route
 async def reset():
-    """Полный сброс"""
-    await application.bot.delete_webhook()
-    await application.initialize()
-    return "✅ Бот перезапущен", 200
+    """Сброс вебхука"""
+    try:
+        if application is None:
+            return "❌ application не импортирован", 500
+        
+        await application.bot.delete_webhook()
+        return "✅ Webhook удален", 200
+    except Exception as e:
+        return f"❌ Ошибка: {e}", 500
 
 @app.route('/loop_status', methods=['GET'])
 def loop_status():
