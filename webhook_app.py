@@ -25,6 +25,26 @@ except ImportError:
 # Создаем Flask приложение
 app = Flask(__name__)
 
+# Глобальный event loop (один на всё приложение)
+loop = None
+
+def get_loop():
+    """Получает или создает глобальный event loop"""
+    global loop
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop
+
+# Инициализируем loop при старте
+get_loop()
+logger.info("✅ Event loop инициализирован")
+
 # Импортируем бота и необходимые классы
 try:
     import bot
@@ -52,7 +72,7 @@ async def ensure_initialized():
         _initialized = True
         logger.info("✅ Application инициализирован")
 
-# --- Простая синхронная обработка ---
+# --- Обработка вебхука с постоянным loop ---
 
 @app.route(f'/{WEBHOOK_SECRET}', methods=['POST'])
 def webhook():
@@ -69,31 +89,33 @@ def webhook():
     
     try:
         json_string = request.get_data().decode('utf-8')
-        logger.info(f"📦 Получены данные: {json_string[:200]}...")
+        logger.info(f"📦 Получены данные")
         
         update_data = json.loads(json_string)
         update = Update.de_json(update_data, application.bot)
         
-        # Создаем и запускаем асинхронную задачу
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            # Сначала инициализируем application
-            loop.run_until_complete(ensure_initialized())
-            # Затем обрабатываем update
-            loop.run_until_complete(application.process_update(update))
-            logger.info("✅ Webhook обработан успешно")
-        except Exception as e:
-            logger.error(f"❌ Ошибка при обработке update: {e}")
-            raise
-        finally:
-            loop.close()
+        # Используем глобальный loop, НЕ закрываем его
+        global loop
+        if loop.is_closed():
+            loop = get_loop()
         
+        # Сначала инициализируем
+        future_init = asyncio.run_coroutine_threadsafe(ensure_initialized(), loop)
+        future_init.result(timeout=5)
+        
+        # Затем обрабатываем update
+        future = asyncio.run_coroutine_threadsafe(application.process_update(update), loop)
+        future.result(timeout=30)  # Ждем до 30 секунд
+        
+        logger.info("✅ Webhook обработан успешно")
         return 'OK', 200
         
     except json.JSONDecodeError as e:
         logger.error(f"❌ Ошибка парсинга JSON: {e}")
         return jsonify({"error": f"Invalid JSON: {e}"}), 400
+    except asyncio.TimeoutError:
+        logger.error("❌ Таймаут обработки")
+        return jsonify({"error": "Processing timeout"}), 500
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
         return jsonify({"error": str(e)}), 500
@@ -104,7 +126,7 @@ def set_webhook():
     if not REQUESTS_AVAILABLE:
         return jsonify({
             "error": "Библиотека requests не установлена",
-            "solution": "Добавьте 'requests==2.31.0' в requirements.txt и перезапустите деплой"
+            "solution": "Добавьте 'requests==2.31.0' в requirements.txt"
         }), 500
     
     try:
@@ -112,15 +134,7 @@ def set_webhook():
         webhook_url = f"https://{railway_url}/{WEBHOOK_SECRET}"
         logger.info(f"🔄 Устанавливаем вебхук на: {webhook_url}")
         
-        # Инициализируем application перед установкой вебхука
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(ensure_initialized())
-        finally:
-            loop.close()
-        
-        # Используем requests для запроса
+        # Используем requests для запроса (синхронно, без asyncio)
         api_url = f"https://api.telegram.org/bot{TOKEN}/setWebhook"
         params = {
             "url": webhook_url,
@@ -138,11 +152,27 @@ def set_webhook():
             logger.error(f"❌ Ошибка установки вебхука: {data}")
             return jsonify({"error": data}), 400
         
-    except requests.exceptions.RequestException as e:
-        logger.error(f"❌ Ошибка запроса: {e}")
-        return jsonify({"error": str(e)}), 500
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/init', methods=['GET'])
+def force_init():
+    """Принудительная инициализация"""
+    global loop, _initialized
+    try:
+        if loop.is_closed():
+            loop = get_loop()
+        
+        future = asyncio.run_coroutine_threadsafe(ensure_initialized(), loop)
+        future.result(timeout=10)
+        
+        return jsonify({
+            "success": True,
+            "initialized": _initialized,
+            "application_exists": application is not None
+        })
+    except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route('/webhook_info', methods=['GET'])
@@ -168,38 +198,13 @@ def delete_webhook():
         logger.error(f"❌ Ошибка: {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route('/init', methods=['GET'])
-def force_init():
-    """Принудительная инициализация"""
-    global _initialized
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(ensure_initialized())
-            return jsonify({
-                "success": True,
-                "initialized": _initialized,
-                "application_exists": application is not None
-            })
-        finally:
-            loop.close()
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/test_webhook', methods=['GET', 'POST'])
-def test_webhook():
-    """Тестовый эндпоинт для проверки"""
-    if request.method == 'POST':
-        return jsonify({
-            "method": "POST",
-            "data": request.get_data().decode('utf-8'),
-            "headers": dict(request.headers)
-        })
+@app.route('/test', methods=['GET'])
+def test():
+    """Тестовый эндпоинт"""
     return jsonify({
-        "method": "GET",
-        "message": "Send POST request to test webhook",
-        "webhook_url": f"/{WEBHOOK_SECRET}"
+        "status": "ok",
+        "message": "Test endpoint works",
+        "loop_closed": loop.is_closed() if loop else None
     })
 
 @app.route('/debug')
@@ -213,8 +218,9 @@ def debug():
         "webhook_path": f"/{WEBHOOK_SECRET}",
         "requests_available": REQUESTS_AVAILABLE,
         "initialized": _initialized,
-        "python_version": sys.version,
-        "routes": [str(rule) for rule in app.url_map.iter_rules()]
+        "loop_exists": loop is not None,
+        "loop_closed": loop.is_closed() if loop else None,
+        "python_version": sys.version
     })
 
 @app.route('/')
