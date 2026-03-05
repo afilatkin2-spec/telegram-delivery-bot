@@ -3,9 +3,10 @@ import re
 import sys
 import os
 import json
+import asyncio
 from difflib import SequenceMatcher
 from typing import Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Минимальная проверка версии Python
 if sys.version_info >= (3, 12):
@@ -44,6 +45,11 @@ ADDRESS, CONTACT = range(2)
 # Статусы заявок
 REQUEST_STATUS_CREATED = "создана"
 REQUEST_STATUS_ASSIGNED = "назначен вп"
+REQUEST_STATUS_EXPIRED = "просрочена"
+REQUEST_STATUS_CANCELLED = "отказ партнёра"
+
+# Таймаут заявки (в минутах)
+REQUEST_TIMEOUT_MINUTES = 10
 
 # Настройка логирования
 logging.basicConfig(
@@ -218,6 +224,76 @@ def update_request_status(request_number: int, status: str, taken_by_username: s
         return False
 
 
+# ========== НОВАЯ ФУНКЦИЯ ДЛЯ ПРОВЕРКИ ПРОСРОЧЕННЫХ ЗАЯВОК ==========
+async def check_expired_requests(context: ContextTypes.DEFAULT_TYPE):
+    """Проверяет просроченные заявки и отправляет уведомления"""
+    logger.info("🔍 Проверка просроченных заявок...")
+    now = datetime.now()
+    
+    expired_requests = []
+    
+    for req_num, req_data in list(user_requests.items()):
+        if req_data['status'] == REQUEST_STATUS_CREATED:
+            created_at = datetime.strptime(req_data['created_at'], "%Y-%m-%d %H:%M:%S")
+            age = now - created_at
+            
+            if age > timedelta(minutes=REQUEST_TIMEOUT_MINUTES):
+                expired_requests.append((req_num, req_data))
+    
+    for req_num, req_data in expired_requests:
+        logger.info(f"⏰ Заявка №{req_num} просрочена")
+        
+        # Обновляем статус
+        req_data['status'] = REQUEST_STATUS_EXPIRED
+        update_request_status(req_num, REQUEST_STATUS_EXPIRED)
+        
+        # Уведомление продающему партнёру
+        try:
+            if req_data.get('user_id'):
+                await context.bot.send_message(
+                    chat_id=req_data['user_id'],
+                    text=(
+                        f"⚠️ Заявка №{req_num} просрочена\n\n"
+                        f"Никто не взял заявку в течение {REQUEST_TIMEOUT_MINUTES} минут.\n"
+                        f"📝 Адрес: {req_data['address']}\n"
+                        f"📞 Контакт: {req_data.get('contact', 'Не указан')}\n\n"
+                        f"❌ Отправьте заявку в СВК"
+                    )
+                )
+                logger.info(f"✅ Уведомление о просрочке отправлено @{req_data['username']}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка уведомления о просрочке: {e}")
+        
+        # Уведомление в общий чат
+        try:
+            await context.bot.send_message(
+                chat_id=int(CHAT_ID),
+                text=(
+                    f"⏰ Заявка №{req_num} закрыта\n"
+                    f"📝 Адрес: {req_data['address']}\n"
+                    f"👤 От: @{req_data['username']}\n"
+                    f"❌ Причина: никто не взял в течение {REQUEST_TIMEOUT_MINUTES} минут"
+                )
+            )
+            logger.info(f"✅ Уведомление о закрытии отправлено в чат")
+        except Exception as e:
+            logger.error(f"❌ Ошибка уведомления в чат: {e}")
+        
+        # Удаляем кнопку из сообщения в чате
+        try:
+            if req_data.get('message_id'):
+                await context.bot.edit_message_text(
+                    chat_id=int(CHAT_ID),
+                    message_id=req_data['message_id'],
+                    text=f"📦 Заявка №{req_num}\n📝 Адрес: {req_data['address']}\n👤 От: @{req_data['username']}\n\n❌ ЗАЯВКА ПРОСРОЧЕНА"
+                )
+        except Exception as e:
+            logger.error(f"❌ Ошибка удаления кнопки: {e}")
+    
+    if expired_requests:
+        logger.info(f"✅ Обработано {len(expired_requests)} просроченных заявок")
+
+
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 def normalize_text(text: str) -> str:
     """Нормализация текста"""
@@ -275,6 +351,10 @@ def get_cancel_keyboard():
 def get_partner_chat_keyboard(request_number: int):
     return InlineKeyboardMarkup([[InlineKeyboardButton("✅ Забрать заявку", callback_data=f"accept_{request_number}")]])
 
+# НОВЫЕ КНОПКИ ДЛЯ ОТКАЗА
+def get_cancel_request_keyboard(request_number: int):
+    return InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отказаться от заявки", callback_data=f"cancel_{request_number}")]])
+
 
 # ========== ИНСТРУКЦИЯ ==========
 SIMPLE_INSTRUCTION = """
@@ -287,12 +367,14 @@ SIMPLE_INSTRUCTION = """
 • Получите номер заявки
 • Ждите, когда заявку заберут
 • Придёт уведомление о взятии
+• Если за 10 мин никто не взял - отправьте в СВК
 
 ⚡️ *Для выдающих партнёров:*
 • Кнопка «✅ Забрать заявку» в чате
 • Нажмите, чтобы принять
 • В личку придёт информация
 • Продающий получит уведомление
+• Если не можете выполнить - откажитесь в личном чате с ботом командой /my_requests
 
 ✅ Всё просто!
 """
@@ -418,33 +500,28 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-async def handle_partner_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка чата партнеров"""
-    target_chat_id = int(CHAT_ID)
+async def my_requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /my_requests - показать взятые заявки и возможность отказа"""
+    user_id = update.effective_user.id
     
-    if update.effective_chat.id != target_chat_id:
+    my_active = []
+    for req_num, req_data in user_requests.items():
+        if req_data.get('taken_by_id') == user_id and req_data['status'] == REQUEST_STATUS_ASSIGNED:
+            my_active.append((req_num, req_data))
+    
+    if not my_active:
+        await update.message.reply_text("📋 У вас нет активных взятых заявок")
         return
     
-    logger.info(f"🔵 Сообщение от @{update.effective_user.username}")
-    
-    # Ответ на сообщение
-    if update.message and update.message.reply_to_message:
-        replied_message = update.message.reply_to_message
-        partner = update.effective_user
-        partner_username = partner.username or f"user_{partner.id}"
-        
-        for req_num, req_data in user_requests.items():
-            if req_data.get('message_id') == replied_message.message_id and req_data.get('status') == REQUEST_STATUS_CREATED:
-                await accept_request(update, context, req_data, req_num, partner, partner_username, partner.full_name or partner_username, target_chat_id)
-                return
-        
-        await update.message.reply_text("❌ Заявка неактивна")
-        return
-    
-    # Простой текст
-    if update.message and update.message.text and not update.message.text.startswith('/'):
+    for req_num, req_data in my_active:
+        keyboard = get_cancel_request_keyboard(req_num)
         await update.message.reply_text(
-            "ℹ️ Забрать заявку:\n• Кнопка ✅\n• Ответ на сообщение\n• /take <номер>\n\n/status - список"
+            f"📦 Заявка №{req_num}\n"
+            f"📝 Адрес: {req_data['address']}\n"
+            f"👤 Продающий: @{req_data['username']}\n"
+            f"📞 Контакт: {req_data.get('contact', 'Не указан')}\n"
+            f"⏰ Взята: {req_data.get('taken_at', 'Неизвестно')}",
+            reply_markup=keyboard
         )
 
 
@@ -467,6 +544,66 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(text=query.message.text)
         else:
             await query.edit_message_text(text=query.message.text + "\n\n❌ Заявка неактивна")
+    
+    elif data.startswith("cancel_"):
+        request_number = int(data.split("_")[1])
+        partner = query.from_user
+        
+        if request_number in user_requests and user_requests[request_number]['status'] == REQUEST_STATUS_ASSIGNED:
+            if user_requests[request_number].get('taken_by_id') == partner.id:
+                await cancel_request(query, context, user_requests[request_number], request_number)
+                await query.edit_message_text(text=query.message.text + "\n\n✅ Вы отказались от заявки")
+            else:
+                await query.edit_message_text(text=query.message.text + "\n\n❌ Это не ваша заявка")
+        else:
+            await query.edit_message_text(text=query.message.text + "\n\n❌ Заявка уже неактивна")
+
+
+async def cancel_request(update_or_query, context, req_data, request_number):
+    """Отказ от заявки"""
+    
+    req_data['status'] = REQUEST_STATUS_CANCELLED
+    logger.info(f"❌ Партнёр @{req_data['taken_by_username']} отказался от заявки №{request_number}")
+    
+    # Обновляем статус в таблице
+    update_request_status(request_number, REQUEST_STATUS_CANCELLED)
+    
+    # Уведомление продающему партнёру
+    try:
+        if req_data.get('user_id'):
+            await context.bot.send_message(
+                chat_id=req_data['user_id'],
+                text=(
+                    f"⚠️ Заявка №{request_number}\n\n"
+                    f"Партнёр @{req_data['taken_by_username']} отказался от заявки.\n\n"
+                    f"📝 Адрес: {req_data['address']}\n"
+                    f"📞 Контакт: {req_data.get('contact', 'Не указан')}\n\n"
+                    f"❌ Отправьте заявку в СВК"
+                )
+            )
+            logger.info(f"✅ Уведомление об отказе отправлено @{req_data['username']}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка уведомления об отказе: {e}")
+    
+    # Уведомление партнёру, который отказался
+    try:
+        await context.bot.send_message(
+            chat_id=req_data['taken_by_id'],
+            text=f"✅ Вы отказались от заявки №{request_number}"
+        )
+    except Exception as e:
+        logger.error(f"❌ Ошибка подтверждения отказа: {e}")
+    
+    # Удаляем кнопку из сообщения в чате
+    try:
+        if req_data.get('message_id'):
+            await context.bot.edit_message_text(
+                chat_id=int(CHAT_ID),
+                message_id=req_data['message_id'],
+                text=f"📦 Заявка №{request_number}\n📝 Адрес: {req_data['address']}\n👤 От: @{req_data['username']}\n\n❌ ОТКАЗ ПАРТНЁРА @{req_data['taken_by_username']}"
+            )
+    except Exception as e:
+        logger.error(f"❌ Ошибка обновления сообщения: {e}")
 
 
 async def accept_request(update_or_query, context, req_data, request_number, partner, 
@@ -496,8 +633,10 @@ async def accept_request(update_or_query, context, req_data, request_number, par
                 f"Инфо по доставке\n"
                 f"   • Адрес: {req_data['address']}\n"
                 f"   • Контакт: {req_data.get('contact', 'Не указан')}\n\n"
-                f"💬 Напишите @{req_data['username']} для деталей"
-            )
+                f"💬 Напишите @{req_data['username']} для деталей\n\n"
+                f"Если не можете выполнить - используйте /my_requests для отказа"
+            ),
+            reply_markup=get_cancel_request_keyboard(request_number)
         )
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
@@ -608,6 +747,7 @@ def create_application():
     application.add_handler(CommandHandler("accept", accept_command))
     application.add_handler(CommandHandler("take", take_command))
     application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("my_requests", my_requests_command))
     
     # Обработчики
     application.add_handler(MessageHandler(filters.Text("📋 Инструкция"), instruction))
@@ -615,6 +755,12 @@ def create_application():
     application.add_handler(CallbackQueryHandler(handle_callback))
     application.add_handler(MessageHandler(filters.Chat(chat_id=partner_chat_id), handle_partner_chat))
     application.add_handler(MessageHandler(filters.Text("❌ Отменить") & filters.ChatType.PRIVATE, cancel))
+    
+    # Добавляем периодическую задачу для проверки просроченных заявок
+    job_queue = application.job_queue
+    if job_queue:
+        job_queue.run_repeating(check_expired_requests, interval=60, first=10)
+        logger.info("✅ Запущена проверка просроченных заявок каждые 60 секунд")
     
     return application
 
@@ -632,6 +778,8 @@ def main():
         app = create_application()
         print("✅ Бот готов к работе")
         print("📊 Railway: автоматический режим")
+        print("⏰ Проверка просроченных заявок: каждые 60 секунд")
+        print("❌ Отказ от заявки: /my_requests в личном чате")
         app.run_polling(allowed_updates=Update.ALL_TYPES)
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
