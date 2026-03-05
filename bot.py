@@ -33,6 +33,10 @@ REPORT_SHEET_NAME = "Отчётность"
 # Состояния для ConversationHandler
 ADDRESS, CONTACT = range(2)
 
+# Статусы заявок
+REQUEST_STATUS_CREATED = "создана"
+REQUEST_STATUS_ASSIGNED = "назначен вп"
+
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -48,6 +52,7 @@ google_client = None
 report_sheet = None
 user_states: Dict[int, bool] = {}  # Словарь для отслеживания, видел ли пользователь инструкцию
 temp_request_data: Dict[int, Dict[str, Any]] = {}  # Временное хранение данных заявки
+request_row_numbers: Dict[int, int] = {}  # Словарь для хранения номеров строк в Google Sheets
 
 # Создаем application как глобальную переменную
 application = None
@@ -132,19 +137,23 @@ def setup_report_sheet(spreadsheet):
             report_sheet = spreadsheet.worksheet(REPORT_SHEET_NAME)
             logger.info(f"✅ Лист '{REPORT_SHEET_NAME}' найден")
             
-            # Проверяем, есть ли заголовок для контакта
+            # Проверяем, есть ли заголовок для статуса
             headers = report_sheet.row_values(1)
-            expected_headers = ["Номер заявки", "Ник отправителя", "Время создания", "Адрес доставки", "Контакт клиента", "Ник кто забрал", "Время взятия"]
+            expected_headers = ["Номер заявки", "Ник отправителя", "Время создания", "Адрес доставки", "Контакт клиента", "Ник кто забрал", "Время взятия", "Статус"]
             
             if len(headers) < len(expected_headers):
                 # Обновляем заголовки если нужно
                 logger.info(f"Обновляем заголовки в листе '{REPORT_SHEET_NAME}'")
-                report_sheet.update('A1:G1', [expected_headers])
+                report_sheet.update('A1:H1', [expected_headers])
+            elif len(headers) == 7:  # Если старый формат (без статуса)
+                logger.info(f"Добавляем колонку статуса в лист '{REPORT_SHEET_NAME}'")
+                # Добавляем заголовок статуса в колонку H
+                report_sheet.update('H1', 'Статус')
             
         except gspread.WorksheetNotFound:
             logger.info(f"Создаем новый лист '{REPORT_SHEET_NAME}'")
             report_sheet = spreadsheet.add_worksheet(title=REPORT_SHEET_NAME, rows=1000, cols=20)
-            headers = ["Номер заявки", "Ник отправителя", "Время создания", "Адрес доставки", "Контакт клиента", "Ник кто забрал", "Время взятия"]
+            headers = ["Номер заявки", "Ник отправителя", "Время создания", "Адрес доставки", "Контакт клиента", "Ник кто забрал", "Время взятия", "Статус"]
             report_sheet.append_row(headers)
             logger.info(f"✅ Создан новый лист '{REPORT_SHEET_NAME}' с заголовками")
         
@@ -155,35 +164,86 @@ def setup_report_sheet(spreadsheet):
 
 
 def save_request_to_sheet(request_number: int, request_data: Dict):
-    """Сохраняет данные заявки в лист отчетности"""
-    global report_sheet
+    """Сохраняет данные заявки в лист отчетности при создании"""
+    global report_sheet, request_row_numbers
     
     if report_sheet is None:
         logger.error(f"❌ Лист отчетности не инициализирован")
         return False
     
     try:
+        # Подготавливаем данные для новой заявки (статус "создана")
         row_data = [
             request_number,
             request_data.get('username', ''),
             request_data.get('created_at', ''),
             request_data.get('address', ''),
             request_data.get('contact', ''),
-            request_data.get('taken_by_username', ''),
-            request_data.get('taken_at', '')
+            '',  # Ник кто забрал (пока пусто)
+            '',  # Время взятия (пока пусто)
+            REQUEST_STATUS_CREATED  # Статус "создана"
         ]
         
-        logger.info(f"Сохраняем данные заявки №{request_number}: {row_data}")
+        logger.info(f"Сохраняем новую заявку №{request_number} в Google Sheets: {row_data}")
         result = report_sheet.append_row(row_data, value_input_option='USER_ENTERED')
         
         if result:
-            logger.info(f"✅ Данные заявки №{request_number} сохранены в лист '{REPORT_SHEET_NAME}'")
+            # Получаем номер добавленной строки
+            all_rows = report_sheet.get_all_values()
+            row_number = len(all_rows)
+            request_row_numbers[request_number] = row_number
+            logger.info(f"✅ Заявка №{request_number} сохранена в лист '{REPORT_SHEET_NAME}', строка {row_number}, статус: {REQUEST_STATUS_CREATED}")
             return True
         else:
+            logger.error(f"❌ Не удалось добавить строку для заявки №{request_number}")
             return False
         
     except Exception as e:
-        logger.error(f"❌ Ошибка при сохранении заявки №{request_number}: {e}")
+        logger.error(f"❌ Ошибка при сохранении заявки №{request_number} в Google Sheets: {e}")
+        return False
+
+
+def update_request_status(request_number: int, status: str, taken_by_username: str = None):
+    """Обновляет статус заявки в Google Sheets"""
+    global report_sheet, request_row_numbers
+    
+    if report_sheet is None:
+        logger.error(f"❌ Лист отчетности не инициализирован")
+        return False
+    
+    try:
+        # Получаем номер строки для этой заявки
+        row_number = request_row_numbers.get(request_number)
+        
+        if not row_number:
+            # Если не нашли в словаре, ищем по номеру заявки в таблице
+            all_rows = report_sheet.get_all_values()
+            for i, row in enumerate(all_rows, start=1):
+                if i > 1 and len(row) > 0 and str(row[0]) == str(request_number):  # Пропускаем заголовок
+                    row_number = i
+                    request_row_numbers[request_number] = i
+                    break
+        
+        if row_number:
+            # Обновляем статус в колонке H (8-я колонка)
+            report_sheet.update(f'H{row_number}', status)
+            logger.info(f"✅ Статус заявки №{request_number} обновлен на '{status}' в строке {row_number}")
+            
+            # Если заявка назначена, обновляем также ник и время
+            if status == REQUEST_STATUS_ASSIGNED and taken_by_username:
+                # Обновляем ник кто забрал (колонка F - 6-я)
+                report_sheet.update(f'F{row_number}', taken_by_username)
+                # Обновляем время взятия (колонка G - 7-я)
+                report_sheet.update(f'G{row_number}', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                logger.info(f"✅ Данные назначения для заявки №{request_number} обновлены: взял @{taken_by_username}")
+            
+            return True
+        else:
+            logger.error(f"❌ Не найдена строка для заявки №{request_number} в Google Sheets")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка при обновлении статуса заявки №{request_number}: {e}")
         return False
 
 
@@ -401,9 +461,12 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'taken_by': None,
         'taken_by_username': None,
         'created_at': current_time,
-        'status': 'new',
+        'status': REQUEST_STATUS_CREATED,  # Статус "создана"
         'message_id': None
     }
+    
+    # Сохраняем заявку в Google Sheets (статус "создана")
+    save_request_to_sheet(request_number, user_requests[request_number])
     
     # Отправляем в чат партнеров с кнопкой
     chat_message = (
@@ -433,7 +496,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in temp_request_data:
         del temp_request_data[user_id]
     
-    logger.info(f"✅ Создана заявка №{request_number} с контактом: {user_contact}")
+    logger.info(f"✅ Создана заявка №{request_number} с контактом: {user_contact}, статус: {REQUEST_STATUS_CREATED}")
     
     return ConversationHandler.END
 
@@ -481,7 +544,7 @@ async def handle_partner_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         for req_num, req_data in user_requests.items():
             message_id = req_data.get('message_id')
-            if message_id == replied_message.message_id and req_data.get('status') == 'new':
+            if message_id == replied_message.message_id and req_data.get('status') == REQUEST_STATUS_CREATED:
                 found_request = req_data
                 found_request_num = req_num
                 break
@@ -525,7 +588,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         partner_username = partner.username or f"user_{partner.id}"
         partner_full_name = partner.full_name or partner_username
         
-        if request_number in user_requests and user_requests[request_number]['status'] == 'new':
+        if request_number in user_requests and user_requests[request_number]['status'] == REQUEST_STATUS_CREATED:
             req_data = user_requests[request_number]
             await accept_request(query, context, req_data, request_number, partner, partner_username, partner_full_name, target_chat_id)
         else:
@@ -541,7 +604,7 @@ async def accept_request(update_or_query, context, req_data, request_number, par
     req_data['taken_by'] = partner_full_name
     req_data['taken_by_username'] = partner_username
     req_data['taken_by_id'] = partner.id
-    req_data['status'] = 'taken'
+    req_data['status'] = REQUEST_STATUS_ASSIGNED  # Статус "назначен вп"
     taken_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     req_data['taken_at'] = taken_at
     
@@ -578,8 +641,8 @@ async def accept_request(update_or_query, context, req_data, request_number, par
     except Exception as e:
         logger.error(f"❌ Не удалось отправить личное сообщение партнеру {partner.id}: {e}")
     
-    # 4. Сохраняем данные в Google Sheets
-    save_request_to_sheet(request_number, req_data)
+    # 4. Обновляем статус в Google Sheets на "назначен вп"
+    update_request_status(request_number, REQUEST_STATUS_ASSIGNED, partner_username)
     
     # 5. Отвечаем только если это reply (не кнопка)
     if hasattr(update_or_query, 'message') and not hasattr(update_or_query, 'edit_message_text'):
@@ -613,7 +676,7 @@ async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     partner_username = partner.username or f"user_{partner.id}"
     partner_full_name = partner.full_name or partner_username
     
-    if request_number in user_requests and user_requests[request_number]['status'] == 'new':
+    if request_number in user_requests and user_requests[request_number]['status'] == REQUEST_STATUS_CREATED:
         req_data = user_requests[request_number]
         await accept_request(update, context, req_data, request_number, partner, partner_username, partner_full_name, target_chat_id)
     else:
@@ -623,7 +686,7 @@ async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def take_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /take - принять заявку по номеру прямо из чата (НОВАЯ КОМАНДА)"""
+    """Команда /take - принять заявку по номеру прямо из чата"""
     target_chat_id = int(CHAT_ID)
     
     # Проверяем, что команда из чата партнеров
@@ -648,7 +711,7 @@ async def take_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     partner_full_name = partner.full_name or partner_username
     
     # Ищем заявку
-    if request_number in user_requests and user_requests[request_number]['status'] == 'new':
+    if request_number in user_requests and user_requests[request_number]['status'] == REQUEST_STATUS_CREATED:
         req_data = user_requests[request_number]
         
         # Принимаем заявку
@@ -668,9 +731,9 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_chat_id = int(CHAT_ID)
     
     # Команда доступна везде, но в чате партнеров показывает активные заявки
-    active_requests = [f"№{num} - {data['address']} - @{data['username']} - Контакт: {data.get('contact', 'Не указан')}" 
+    active_requests = [f"№{num} - {data['address']} - @{data['username']} - Контакт: {data.get('contact', 'Не указан')} - Статус: {data['status']}" 
                        for num, data in user_requests.items() 
-                       if data['status'] == 'new']
+                       if data['status'] == REQUEST_STATUS_CREATED]
     
     if active_requests:
         await update.message.reply_text(
@@ -703,7 +766,7 @@ def create_application():
     # 1. Команды
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("accept", accept_command))
-    application.add_handler(CommandHandler("take", take_command))  # НОВАЯ КОМАНДА
+    application.add_handler(CommandHandler("take", take_command))
     application.add_handler(CommandHandler("status", status_command))
     
     # 2. Обработчик инструкции
@@ -759,7 +822,7 @@ def main():
         print(f"   • Чат партнеров (ID: {int(CHAT_ID)}) → /status, /take и ответы на заявки")
         print("   • Личные сообщения → все функции")
         print("   • Inline-кнопки → handle_callback")
-        print("   • Данные сохраняются в лист 'Отчётность' с контактом клиента")
+        print("   • Данные сохраняются в лист 'Отчётность' с контактом клиента и статусом")
         
         # Запускаем бота
         app.run_polling(allowed_updates=Update.ALL_TYPES)
