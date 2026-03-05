@@ -287,6 +287,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start - первый запуск"""
     user_id = update.effective_user.id
     
+    # Проверяем, что это личное сообщение, а не чат партнеров
+    target_chat_id = int(CHAT_ID)
+    if update.effective_chat.id == target_chat_id:
+        # В чате партнеров команда /start не работает
+        await update.message.reply_text(
+            "❌ В этом чате доступна только команда /status"
+        )
+        return ConversationHandler.END
+    
     # Проверяем, первый ли это запуск
     if user_id not in user_states:
         user_states[user_id] = False
@@ -412,11 +421,11 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_requests[request_number]['message_id'] = sent_message.message_id
     logger.info(f"   Сообщение в чат отправлено, ID: {sent_message.message_id}")
     
-    # Подтверждение пользователю
+    # Подтверждение пользователю - ИСПРАВЛЕНО: 30 минут -> 10 минут
     await update.message.reply_text(
         f"✅ Заявка №{request_number} отправлена, с вами свяжется партнёр.\n"
         f"Контакт клиента сохранён: {user_contact}\n\n"
-        f"Если никто не свяжется в течении 30 минут, отправьте клиенту анкету на доставку через СВК",
+        f"Если никто не свяжется в течение 10 минут, отправьте клиенту анкету на доставку через СВК",
         reply_markup=get_main_keyboard()
     )
     
@@ -492,7 +501,8 @@ async def handle_partner_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(
             "ℹ️ Чтобы забрать заявку:\n"
             "• Нажмите кнопку «✅ Забрать заявку» под сообщением\n"
-            "• Или ответьте на сообщение с заявкой"
+            "• Или ответьте на сообщение с заявкой\n\n"
+            "📋 Для просмотра активных заявок используйте /status"
         )
         logger.info("=" * 60)
         return
@@ -581,7 +591,12 @@ async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /accept - альтернативный способ принять заявку"""
     target_chat_id = int(CHAT_ID)
     
-    if update.effective_chat.id != target_chat_id:
+    # Проверяем, что это личное сообщение, а не чат партнеров
+    if update.effective_chat.id == target_chat_id:
+        # В чате партнеров команда /accept не работает
+        await update.message.reply_text(
+            "❌ В этом чате доступна только команда /status"
+        )
         return
     
     logger.info(f"🔵 Команда /accept от @{update.effective_user.username}")
@@ -609,9 +624,8 @@ async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /status - показать активные заявки"""
     target_chat_id = int(CHAT_ID)
-    if update.effective_chat.id != target_chat_id:
-        return
     
+    # Команда доступна везде, но в чате партнеров показывает активные заявки
     active_requests = [f"№{num} - {data['address']} - @{data['username']} - Контакт: {data.get('contact', 'Не указан')}" 
                        for num, data in user_requests.items() 
                        if data['status'] == 'new']
@@ -699,8 +713,8 @@ def main():
         logger.info("✅ Бот инициализирован")
         print("🚀 Бот запущен! Нажмите Ctrl+C для остановки")
         print("📊 Маршрутизация:")
-        print(f"   • Чат партнеров (ID: {int(CHAT_ID)}) → handle_partner_chat")
-        print("   • Личные сообщения → ConversationHandler для заявок")
+        print(f"   • Чат партнеров (ID: {int(CHAT_ID)}) → только /status и ответы на заявки")
+        print("   • Личные сообщения → все функции")
         print("   • Inline-кнопки → handle_callback")
         print("   • Данные сохраняются в лист 'Отчётность' с контактом клиента")
         
