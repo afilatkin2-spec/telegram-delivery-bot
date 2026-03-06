@@ -4,7 +4,6 @@ import logging
 import os
 import sys
 import asyncio
-import traceback
 
 # Настройка логирования
 logging.basicConfig(
@@ -17,190 +16,85 @@ logger = logging.getLogger(__name__)
 # Создаем Flask приложение
 app = Flask(__name__)
 
-# Глобальный event loop
-loop = None
-
-def init_loop():
-    """Инициализирует глобальный event loop"""
-    global loop
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_closed():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop
-
-# Инициализируем loop
-init_loop()
-logger.info("✅ Event loop инициализирован")
-
-# Импортируем requests
-try:
-    import requests
-    REQUESTS_AVAILABLE = True
-    logger.info("✅ Библиотека requests импортирована")
-except ImportError:
-    REQUESTS_AVAILABLE = False
-    logger.warning("⚠️ Библиотека requests не установлена")
-
 # Импортируем бота
 try:
     import bot
     from telegram import Update
     application = bot.application
     TOKEN = bot.TOKEN
-    logger.info("✅ Бот успешно импортирован из bot.py")
-    logger.info(f"✅ Application type: {type(application)}")
-    logger.info(f"✅ Application handlers: {len(application.handlers) if application else 0}")
+    logger.info("✅ Бот успешно импортирован")
+    
+    # Проверяем наличие обработчиков
+    handlers_count = sum(len(h) for h in application.handlers.values())
+    logger.info(f"✅ Зарегистрировано обработчиков: {handlers_count}")
+    
 except Exception as e:
-    logger.error(f"❌ Ошибка при импорте бота: {e}")
+    logger.error(f"❌ Ошибка импорта: {e}")
     application = None
     Update = None
     TOKEN = None
 
 # Секретный путь для вебхука
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "pavdanf")
-logger.info(f"🔑 Используется секрет вебхука: {WEBHOOK_SECRET}")
+logger.info(f"🔑 Секрет: {WEBHOOK_SECRET}")
 
-# ИНИЦИАЛИЗИРУЕМ APPLICATION ПРИ ЗАПУСКЕ
+# Инициализируем application
 if application:
     try:
-        logger.info("🔄 Инициализация application...")
-        loop = init_loop()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         loop.run_until_complete(application.initialize())
-        logger.info("✅ Application успешно инициализирован")
-        
-        # Проверяем наличие обработчиков
-        handlers_count = sum(len(h) for h in application.handlers.values())
-        logger.info(f"✅ Зарегистрировано обработчиков: {handlers_count}")
-        
+        loop.close()
+        logger.info("✅ Application инициализирован")
     except Exception as e:
-        logger.error(f"❌ Ошибка инициализации application: {e}")
+        logger.error(f"❌ Ошибка инициализации: {e}")
 
 @app.route(f'/{WEBHOOK_SECRET}', methods=['POST'])
 def webhook():
-    """Обработчик вебхука - НЕБЛОКИРУЮЩАЯ ВЕРСИЯ"""
-    logger.info("📩 Получен POST запрос на webhook")
-    
-    if request.method != 'POST':
-        return jsonify({"error": "Method not allowed"}), 405
-    
-    if application is None or Update is None:
-        logger.error("❌ Бот не инициализирован")
-        return jsonify({"error": "Bot not initialized"}), 500
+    """Обработчик вебхука"""
+    logger.info("📩 Получен POST запрос")
     
     try:
         # Получаем данные
         json_string = request.get_data().decode('utf-8')
-        logger.info(f"📦 Получены данные, длина: {len(json_string)}")
+        logger.info(f"📦 Данные: {json_string[:200]}...")
         
         # Парсим update
         update_data = json.loads(json_string)
         update = Update.de_json(update_data, application.bot)
         
-        # Проверяем тип update
-        if update.message:
-            logger.info(f"📨 Получено сообщение от пользователя {update.message.from_user.id}")
-            logger.info(f"📝 Текст сообщения: {update.message.text}")
-        elif update.callback_query:
-            logger.info(f"🔘 Получен callback query")
+        # Создаем временный loop для обработки
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(application.process_update(update))
+            logger.info("✅ Update обработан")
+        finally:
+            loop.close()
         
-        # Используем глобальный loop
-        global loop
-        if loop.is_closed():
-            loop = init_loop()
-        
-        # НЕ БЛОКИРУЕМ ПОТОК - запускаем в фоне
-        asyncio.run_coroutine_threadsafe(application.process_update(update), loop)
-        
-        # СРАЗУ ВОЗВРАЩАЕМ ОТВЕТ
-        logger.info("✅ Webhook передан в обработку")
         return 'OK', 200
         
-    except json.JSONDecodeError as e:
-        logger.error(f"❌ Ошибка парсинга JSON: {e}")
-        return jsonify({"error": f"Invalid JSON: {e}"}), 400
-    except Exception as e:
-        logger.error(f"❌ Ошибка: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/set_webhook', methods=['GET'])
-def set_webhook():
-    """Установка вебхука"""
-    if not REQUESTS_AVAILABLE:
-        return jsonify({"error": "requests library not available"}), 500
-    
-    try:
-        railway_url = request.host
-        webhook_url = f"https://{railway_url}/{WEBHOOK_SECRET}"
-        logger.info(f"🔄 Устанавливаем вебхук на: {webhook_url}")
-        
-        api_url = f"https://api.telegram.org/bot{TOKEN}/setWebhook"
-        params = {
-            "url": webhook_url,
-            "drop_pending_updates": True,
-            "allowed_updates": json.dumps(['message', 'callback_query', 'edited_message'])
-        }
-        
-        response = requests.get(api_url, params=params, timeout=10)
-        data = response.json()
-        
-        if data.get('ok'):
-            logger.info(f"✅ Вебхук установлен")
-            return jsonify({"success": True, "result": data})
-        else:
-            logger.error(f"❌ Ошибка установки: {data}")
-            return jsonify({"error": data}), 400
-            
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/webhook_info', methods=['GET'])
-def webhook_info():
-    """Информация о вебхуке"""
-    if not REQUESTS_AVAILABLE:
-        return jsonify({"error": "requests not available"}), 500
-    
-    try:
-        api_url = f"https://api.telegram.org/bot{TOKEN}/getWebhookInfo"
-        response = requests.get(api_url, timeout=10)
-        return jsonify(response.json())
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return 'OK', 200  # Всегда возвращаем OK, даже при ошибке
 
 @app.route('/debug')
 def debug():
     """Отладочная информация"""
-    handlers_count = 0
-    if application and hasattr(application, 'handlers'):
-        handlers_count = sum(len(h) for h in application.handlers.values())
+    handlers = 0
+    if application:
+        handlers = sum(len(h) for h in application.handlers.values())
     
     return jsonify({
-        "bot_imported": 'bot' in sys.modules,
-        "application_exists": application is not None,
-        "update_exists": Update is not None,
-        "handlers_count": handlers_count,
-        "webhook_secret": WEBHOOK_SECRET,
-        "requests_available": REQUESTS_AVAILABLE,
-        "loop_closed": loop.is_closed() if loop else None,
-        "python_version": sys.version
+        "bot_imported": application is not None,
+        "handlers_count": handlers,
+        "webhook_secret": WEBHOOK_SECRET
     })
 
 @app.route('/')
 def index():
-    return jsonify({
-        "status": "running",
-        "message": "Telegram bot is running on Railway!"
-    })
+    return jsonify({"status": "running"})
 
 @app.route('/health')
 def health():
     return jsonify({"status": "healthy"})
-
-if __name__ == '__main__':
-    port = int(os.getenv("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
