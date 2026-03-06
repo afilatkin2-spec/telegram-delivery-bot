@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 # Создаем Flask приложение
 app = Flask(__name__)
 
-# Глобальный event loop (один на всё приложение)
+# Глобальный event loop
 loop = None
 
 def init_loop():
@@ -48,6 +48,9 @@ try:
     handlers_count = sum(len(h) for h in application.handlers.values())
     logger.info(f"✅ Зарегистрировано обработчиков: {handlers_count}")
     
+    # НЕ инициализируем application здесь!
+    # Application уже инициализирован в bot.py при импорте
+    
 except Exception as e:
     logger.error(f"❌ Ошибка импорта: {e}")
     application = None
@@ -57,15 +60,6 @@ except Exception as e:
 # Секретный путь для вебхука
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "pavdanf")
 logger.info(f"🔑 Секрет: {WEBHOOK_SECRET}")
-
-# Инициализируем application в глобальном loop
-if application:
-    try:
-        future = asyncio.run_coroutine_threadsafe(application.initialize(), loop)
-        future.result(timeout=10)
-        logger.info("✅ Application инициализирован")
-    except Exception as e:
-        logger.error(f"❌ Ошибка инициализации: {e}")
 
 @app.route(f'/{WEBHOOK_SECRET}', methods=['POST'])
 def webhook():
@@ -81,7 +75,7 @@ def webhook():
         update_data = json.loads(json_string)
         update = Update.de_json(update_data, application.bot)
         
-        # Используем глобальный loop (НЕ ЗАКРЫВАЕМ!)
+        # Используем глобальный loop
         global loop
         if loop.is_closed():
             loop = init_loop()
