@@ -16,6 +16,26 @@ logger = logging.getLogger(__name__)
 # Создаем Flask приложение
 app = Flask(__name__)
 
+# Глобальный event loop (один на всё приложение)
+loop = None
+
+def init_loop():
+    """Инициализирует глобальный event loop"""
+    global loop
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop
+
+# Инициализируем loop при старте
+init_loop()
+logger.info("✅ Event loop инициализирован")
+
 # Импортируем бота
 try:
     import bot
@@ -38,13 +58,11 @@ except Exception as e:
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "pavdanf")
 logger.info(f"🔑 Секрет: {WEBHOOK_SECRET}")
 
-# Инициализируем application
+# Инициализируем application в глобальном loop
 if application:
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(application.initialize())
-        loop.close()
+        future = asyncio.run_coroutine_threadsafe(application.initialize(), loop)
+        future.result(timeout=10)
         logger.info("✅ Application инициализирован")
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации: {e}")
@@ -57,26 +75,29 @@ def webhook():
     try:
         # Получаем данные
         json_string = request.get_data().decode('utf-8')
-        logger.info(f"📦 Данные: {json_string[:200]}...")
+        logger.info(f"📦 Данные получены, длина: {len(json_string)}")
         
         # Парсим update
         update_data = json.loads(json_string)
         update = Update.de_json(update_data, application.bot)
         
-        # Создаем временный loop для обработки
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(application.process_update(update))
-            logger.info("✅ Update обработан")
-        finally:
-            loop.close()
+        # Используем глобальный loop (НЕ ЗАКРЫВАЕМ!)
+        global loop
+        if loop.is_closed():
+            loop = init_loop()
         
+        # Запускаем обработку в глобальном loop
+        asyncio.run_coroutine_threadsafe(application.process_update(update), loop)
+        
+        logger.info("✅ Update передан в обработку")
         return 'OK', 200
         
+    except json.JSONDecodeError as e:
+        logger.error(f"❌ Ошибка парсинга JSON: {e}")
+        return 'OK', 200
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
-        return 'OK', 200  # Всегда возвращаем OK, даже при ошибке
+        return 'OK', 200
 
 @app.route('/debug')
 def debug():
@@ -88,7 +109,8 @@ def debug():
     return jsonify({
         "bot_imported": application is not None,
         "handlers_count": handlers,
-        "webhook_secret": WEBHOOK_SECRET
+        "webhook_secret": WEBHOOK_SECRET,
+        "loop_closed": loop.is_closed() if loop else None
     })
 
 @app.route('/')
@@ -98,3 +120,7 @@ def index():
 @app.route('/health')
 def health():
     return jsonify({"status": "healthy"})
+
+if __name__ == '__main__':
+    port = int(os.getenv("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
