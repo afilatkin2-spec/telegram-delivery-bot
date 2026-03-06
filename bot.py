@@ -381,32 +381,74 @@ SIMPLE_INSTRUCTION = """
 
 # ========== ОБРАБОТЧИКИ ==========
 
+#async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+   # """Команда /start"""
+   # user_id = update.effective_user.id
+   # target_chat_id = int(CHAT_ID)
+    
+   # # Игнорируем сообщения из чата партнеров
+   # if update.effective_chat.id == target_chat_id:
+    #    await update.message.reply_text("❌ В этом чате доступна только /status")
+    #    return ConversationHandler.END
+    
+  #  # Простая проверка состояния без сложной логики
+   # if user_id not in user_states:
+    #    user_states[user_id] = False
+     #   await update.message.reply_text(
+            #"👋 Добро пожаловать!\n\nНажмите «📋 Инструкция»",
+       #     reply_markup=get_initial_keyboard()
+      #  )
+  #  else:
+       # await update.message.reply_text(
+        #    "👋 С возвращением!\n\nНажмите «📝 Оставить заявку»",
+        #    reply_markup=get_main_keyboard()
+        #)
+    
+   # logger.info(f"✅ /start обработан для пользователя {user_id}")
+   # return ConversationHandler.END
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start"""
-    user_id = update.effective_user.id
-    target_chat_id = int(CHAT_ID)
+    import traceback
+    logger.info("=" * 50)
+    logger.info("🔥 ФУНКЦИЯ START ВЫЗВАНА!")
+    logger.info(f"🔥 User ID: {update.effective_user.id}")
+    logger.info(f"🔥 Username: {update.effective_user.username}")
+    logger.info(f"🔥 Chat ID: {update.effective_chat.id}")
+    logger.info(f"🔥 Message text: {update.message.text}")
     
-    # Игнорируем сообщения из чата партнеров
-    if update.effective_chat.id == target_chat_id:
-        await update.message.reply_text("❌ В этом чате доступна только /status")
-        return ConversationHandler.END
+    try:
+        user_id = update.effective_user.id
+        target_chat_id = int(CHAT_ID)
+        
+        # Игнорируем сообщения из чата партнеров
+        if update.effective_chat.id == target_chat_id:
+            logger.info("❌ Сообщение из чата партнеров, игнорируем")
+            await update.message.reply_text("❌ В этом чате доступна только /status")
+            return ConversationHandler.END
+        
+        # Простая проверка состояния
+        if user_id not in user_states:
+            user_states[user_id] = False
+            logger.info(f"✅ Новый пользователь {user_id}, показываем инструкцию")
+            await update.message.reply_text(
+                "👋 Добро пожаловать!\n\nНажмите «📋 Инструкция»",
+                reply_markup=get_initial_keyboard()
+            )
+        else:
+            logger.info(f"✅ Возвращающийся пользователь {user_id}, показываем кнопку заявки")
+            await update.message.reply_text(
+                "👋 С возвращением!\n\nНажмите «📝 Оставить заявку»",
+                reply_markup=get_main_keyboard()
+            )
+        
+        logger.info(f"✅ /start обработан для пользователя {user_id}")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка в start: {e}")
+        logger.error(traceback.format_exc())
     
-    # Простая проверка состояния без сложной логики
-    if user_id not in user_states:
-        user_states[user_id] = False
-        await update.message.reply_text(
-            "👋 Добро пожаловать!\n\nНажмите «📋 Инструкция»",
-            reply_markup=get_initial_keyboard()
-        )
-    else:
-        await update.message.reply_text(
-            "👋 С возвращением!\n\nНажмите «📝 Оставить заявку»",
-            reply_markup=get_main_keyboard()
-        )
-    
-    logger.info(f"✅ /start обработан для пользователя {user_id}")
+    logger.info("=" * 50)
     return ConversationHandler.END
-
 
 async def instruction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает инструкцию"""
