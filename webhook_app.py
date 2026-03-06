@@ -37,12 +37,19 @@ def init_loop():
 init_loop()
 logger.info("✅ Event loop инициализирован")
 
-# Импортируем бота
+# Импортируем бота и необходимые классы
 try:
     import bot
     from telegram import Update
     application = bot.application
     TOKEN = bot.TOKEN
+    
+    # Проверяем, что все импортировалось корректно
+    if application is None:
+        raise ImportError("application is None")
+    if Update is None:
+        raise ImportError("Update is None")
+        
     logger.info("✅ Бот успешно импортирован")
     
     # Проверяем наличие обработчиков
@@ -55,8 +62,13 @@ try:
     future.result(timeout=10)
     logger.info("✅ Application успешно инициализирован")
     
-except Exception as e:
+except ImportError as e:
     logger.error(f"❌ Ошибка импорта: {e}")
+    application = None
+    Update = None
+    TOKEN = None
+except Exception as e:
+    logger.error(f"❌ Неожиданная ошибка: {e}")
     application = None
     Update = None
     TOKEN = None
@@ -69,6 +81,11 @@ logger.info(f"🔑 Секрет: {WEBHOOK_SECRET}")
 def webhook():
     """Обработчик вебхука"""
     logger.info("📩 Получен POST запрос")
+    
+    # Проверяем, что бот инициализирован
+    if application is None or Update is None:
+        logger.error("❌ Бот не инициализирован")
+        return 'OK', 200
     
     try:
         # Получаем данные
@@ -84,7 +101,7 @@ def webhook():
         if loop.is_closed():
             loop = init_loop()
         
-        # Запускаем обработку и ЖДЕМ результат (небольшой таймаут)
+        # Запускаем обработку
         logger.info("🔄 Запускаем обработку update...")
         future = asyncio.run_coroutine_threadsafe(application.process_update(update), loop)
         
@@ -117,6 +134,7 @@ def debug():
     
     return jsonify({
         "bot_imported": application is not None,
+        "update_imported": Update is not None,
         "handlers_count": handlers,
         "webhook_secret": WEBHOOK_SECRET,
         "loop_closed": loop.is_closed() if loop else None
