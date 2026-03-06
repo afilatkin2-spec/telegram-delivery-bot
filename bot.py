@@ -1,4 +1,3 @@
-##
 import logging
 import re
 import sys
@@ -382,17 +381,11 @@ SIMPLE_INSTRUCTION = """
 
 
 # ========== ОБРАБОТЧИКИ ==========
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start - начинаем с нуля"""
     import traceback
     import sys
-    
-    # ПРИНУДИТЕЛЬНЫЙ ВЫВОД (ДАЖЕ ЕСЛИ ЛОГИ НЕ РАБОТАЮТ)
-    print("🔥🔥🔥 START ВЫЗВАН! 🔥🔥🔥", file=sys.stdout)
-    sys.stdout.flush()
-    
-    logger.info("=" * 50)
-    logger.info("🔥 ФУНКЦИЯ START ВЫЗВАНА!")
     
     user_id = update.effective_user.id
     target_chat_id = int(CHAT_ID)
@@ -405,8 +398,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # Сбрасываем состояние пользователя
         logger.info(f"🔄 Сбрасываем состояние пользователя {user_id}")
-        print(f"🔄 Сбрасываем состояние пользователя {user_id}", file=sys.stdout)
-        sys.stdout.flush()
         
         # Удаляем из user_states, чтобы считался новым
         if user_id in user_states:
@@ -425,8 +416,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Показываем начальный экран
         logger.info(f"✅ Показываем начальный экран для пользователя {user_id}")
-        print(f"✅ Отправляем сообщение пользователю {user_id}", file=sys.stdout)
-        sys.stdout.flush()
         
         await update.message.reply_text(
             "👋 Добро пожаловать!\n\nНажмите «📋 Инструкция» для начала работы",
@@ -434,21 +423,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         logger.info(f"✅ /start обработан для пользователя {user_id}")
-        print(f"✅ /start завершен для пользователя {user_id}", file=sys.stdout)
-        sys.stdout.flush()
         
     except Exception as e:
         logger.error(f"❌ Ошибка в start: {e}")
-        print(f"❌ Ошибка: {e}", file=sys.stdout)
         logger.error(traceback.format_exc())
-        sys.stdout.flush()
     
-    logger.info("=" * 50)
     return ConversationHandler.END
 
 
 async def instruction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает инструкцию"""
+    import traceback
+    
     user_id = update.effective_user.id
     logger.info(f"📋 ИНСТРУКЦИЯ вызвана для пользователя {user_id}")
     
@@ -460,98 +446,136 @@ async def instruction(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         user_states[user_id] = True
         logger.info(f"✅ Инструкция показана пользователю {user_id}")
+        
     except Exception as e:
         logger.error(f"❌ Ошибка в instruction: {e}")
+        logger.error(traceback.format_exc())
     
     return ConversationHandler.END
 
 
 async def start_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало создания заявки"""
+    import traceback
+    
     logger.info(f"📝 start_request вызван пользователем {update.effective_user.id}")
-    await update.message.reply_text("Введите адрес доставки:", reply_markup=get_cancel_keyboard())
+    
+    try:
+        await update.message.reply_text(
+            "Введите адрес доставки:", 
+            reply_markup=get_cancel_keyboard()
+        )
+    except Exception as e:
+        logger.error(f"❌ Ошибка в start_request: {e}")
+        logger.error(traceback.format_exc())
+    
     return ADDRESS
 
 
 async def handle_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка адреса"""
+    import traceback
+    
     user_id = update.effective_user.id
     user_address = update.message.text
     logger.info(f"📍 Обработка адреса от {user_id}: {user_address}")
     
-    if user_id not in temp_request_data:
-        temp_request_data[user_id] = {}
-    temp_request_data[user_id]['address'] = user_address
-    temp_request_data[user_id]['username'] = update.effective_user.username or f"user_{user_id}"
-    
-    if find_matching_city(user_address):
-        await update.message.reply_text(
-            "✅ Город найден!\n\nУкажите способ связи с клиентом:"
-        )
-        return CONTACT
-    else:
-        await update.message.reply_text(
-            "❌ Адрес не найден. Отправьте клиенту анкету",
-            reply_markup=get_main_keyboard()
-        )
+    try:
+        if user_id not in temp_request_data:
+            temp_request_data[user_id] = {}
+        temp_request_data[user_id]['address'] = user_address
+        temp_request_data[user_id]['username'] = update.effective_user.username or f"user_{user_id}"
+        
+        if find_matching_city(user_address):
+            await update.message.reply_text(
+                "✅ Город найден!\n\nУкажите способ связи с клиентом:"
+            )
+            return CONTACT
+        else:
+            await update.message.reply_text(
+                "❌ Адрес не найден. Отправьте клиенту анкету",
+                reply_markup=get_main_keyboard()
+            )
+            return ConversationHandler.END
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка в handle_address: {e}")
+        logger.error(traceback.format_exc())
         return ConversationHandler.END
 
 
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка контакта и создание заявки"""
+    import traceback
+    
     user_id = update.effective_user.id
     user_contact = update.message.text
     target_chat_id = int(CHAT_ID)
     
-    user_data = temp_request_data.get(user_id, {})
-    user_address = user_data.get('address', '')
-    username = user_data.get('username', f"user_{user_id}")
+    try:
+        user_data = temp_request_data.get(user_id, {})
+        user_address = user_data.get('address', '')
+        username = user_data.get('username', f"user_{user_id}")
+        
+        request_number = get_next_request_number()
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        user_requests[request_number] = {
+            'user_id': user_id,
+            'username': username,
+            'address': user_address,
+            'contact': user_contact,
+            'matched_city': find_matching_city(user_address),
+            'taken_by': None,
+            'taken_by_username': None,
+            'taken_by_id': None,
+            'created_at': current_time,
+            'status': REQUEST_STATUS_CREATED,
+            'message_id': None
+        }
+        
+        save_request_to_sheet(request_number, user_requests[request_number])
+        
+        sent_message = await context.bot.send_message(
+            chat_id=target_chat_id,
+            text=f"📦 Новая заявка №{request_number}\n📝 Адрес: {user_address}\n👤 От: @{username}",
+            reply_markup=get_partner_chat_keyboard(request_number)
+        )
+        
+        user_requests[request_number]['message_id'] = sent_message.message_id
+        
+        await update.message.reply_text(
+            f"✅ Заявка №{request_number} отправлена\nКонтакт: {user_contact}\n\nЕсли никто не свяжется за 10 минут, отправьте анкету",
+            reply_markup=get_main_keyboard()
+        )
+        
+        if user_id in temp_request_data:
+            del temp_request_data[user_id]
+        
+        logger.info(f"✅ Заявка №{request_number} создана")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка в handle_contact: {e}")
+        logger.error(traceback.format_exc())
     
-    request_number = get_next_request_number()
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    user_requests[request_number] = {
-        'user_id': user_id,
-        'username': username,
-        'address': user_address,
-        'contact': user_contact,
-        'matched_city': find_matching_city(user_address),
-        'taken_by': None,
-        'taken_by_username': None,
-        'taken_by_id': None,
-        'created_at': current_time,
-        'status': REQUEST_STATUS_CREATED,
-        'message_id': None
-    }
-    
-    save_request_to_sheet(request_number, user_requests[request_number])
-    
-    sent_message = await context.bot.send_message(
-        chat_id=target_chat_id,
-        text=f"📦 Новая заявка №{request_number}\n📝 Адрес: {user_address}\n👤 От: @{username}",
-        reply_markup=get_partner_chat_keyboard(request_number)
-    )
-    
-    user_requests[request_number]['message_id'] = sent_message.message_id
-    
-    await update.message.reply_text(
-        f"✅ Заявка №{request_number} отправлена\nКонтакт: {user_contact}\n\nЕсли никто не свяжется за 10 минут, отправьте анкету",
-        reply_markup=get_main_keyboard()
-    )
-    
-    if user_id in temp_request_data:
-        del temp_request_data[user_id]
-    
-    logger.info(f"✅ Заявка №{request_number} создана")
     return ConversationHandler.END
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отмена"""
+    import traceback
+    
     user_id = update.effective_user.id
-    if user_id in temp_request_data:
-        del temp_request_data[user_id]
-    await update.message.reply_text("❌ Отменено", reply_markup=get_main_keyboard())
+    
+    try:
+        if user_id in temp_request_data:
+            del temp_request_data[user_id]
+        await update.message.reply_text("❌ Отменено", reply_markup=get_main_keyboard())
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка в cancel: {e}")
+        logger.error(traceback.format_exc())
+    
     return ConversationHandler.END
 
 
@@ -564,120 +588,139 @@ async def handle_partner_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     logger.info(f"🔵 Сообщение от @{update.effective_user.username}")
     
-    # Ответ на сообщение
-    if update.message and update.message.reply_to_message:
-        replied_message = update.message.reply_to_message
-        partner = update.effective_user
-        partner_username = partner.username or f"user_{partner.id}"
+    try:
+        # Ответ на сообщение
+        if update.message and update.message.reply_to_message:
+            replied_message = update.message.reply_to_message
+            partner = update.effective_user
+            partner_username = partner.username or f"user_{partner.id}"
+            
+            for req_num, req_data in user_requests.items():
+                if req_data.get('message_id') == replied_message.message_id and req_data.get('status') == REQUEST_STATUS_CREATED:
+                    await accept_request(update, context, req_data, req_num, partner, partner_username, partner.full_name or partner_username, target_chat_id)
+                    return
+            
+            await update.message.reply_text("❌ Заявка неактивна")
+            return
         
-        for req_num, req_data in user_requests.items():
-            if req_data.get('message_id') == replied_message.message_id and req_data.get('status') == REQUEST_STATUS_CREATED:
-                await accept_request(update, context, req_data, req_num, partner, partner_username, partner.full_name or partner_username, target_chat_id)
-                return
-        
-        await update.message.reply_text("❌ Заявка неактивна")
-        return
-    
-    # Простой текст
-    if update.message and update.message.text and not update.message.text.startswith('/'):
-        await update.message.reply_text(
-            "ℹ️ Забрать заявку:\n• Кнопка ✅\n• Ответ на сообщение\n• /take <номер>\n\n/status - список"
-        )
+        # Простой текст
+        if update.message and update.message.text and not update.message.text.startswith('/'):
+            await update.message.reply_text(
+                "ℹ️ Забрать заявку:\n• Кнопка ✅\n• Ответ на сообщение\n• /take <номер>\n\n/status - список"
+            )
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка в handle_partner_chat: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка inline-кнопок"""
+    import traceback
+    
     query = update.callback_query
     await query.answer()
     
     data = query.data
     target_chat_id = int(CHAT_ID)
     
-    if data.startswith("accept_"):
-        request_number = int(data.split("_")[1])
-        partner = query.from_user
-        partner_username = partner.username or f"user_{partner.id}"
-        
-        if request_number in user_requests and user_requests[request_number]['status'] == REQUEST_STATUS_CREATED:
-            await accept_request(query, context, user_requests[request_number], request_number, 
-                               partner, partner_username, partner.full_name or partner_username, target_chat_id)
-            await query.edit_message_text(text=query.message.text)
-        else:
-            await query.edit_message_text(text=query.message.text + "\n\n❌ Заявка неактивна")
-    
-    elif data.startswith("cancel_"):
-        request_number = int(data.split("_")[1])
-        partner = query.from_user
-        
-        if request_number in user_requests and user_requests[request_number]['status'] == REQUEST_STATUS_ASSIGNED:
-            if user_requests[request_number].get('taken_by_id') == partner.id:
-                await cancel_request(query, context, user_requests[request_number], request_number)
-                await query.edit_message_text(text=query.message.text + "\n\n✅ Вы отказались от заявки")
+    try:
+        if data.startswith("accept_"):
+            request_number = int(data.split("_")[1])
+            partner = query.from_user
+            partner_username = partner.username or f"user_{partner.id}"
+            
+            if request_number in user_requests and user_requests[request_number]['status'] == REQUEST_STATUS_CREATED:
+                await accept_request(query, context, user_requests[request_number], request_number, 
+                                   partner, partner_username, partner.full_name or partner_username, target_chat_id)
+                await query.edit_message_text(text=query.message.text)
             else:
-                await query.edit_message_text(text=query.message.text + "\n\n❌ Это не ваша заявка")
-        else:
-            await query.edit_message_text(text=query.message.text + "\n\n❌ Заявка уже неактивна")
+                await query.edit_message_text(text=query.message.text + "\n\n❌ Заявка неактивна")
+        
+        elif data.startswith("cancel_"):
+            request_number = int(data.split("_")[1])
+            partner = query.from_user
+            
+            if request_number in user_requests and user_requests[request_number]['status'] == REQUEST_STATUS_ASSIGNED:
+                if user_requests[request_number].get('taken_by_id') == partner.id:
+                    await cancel_request(query, context, user_requests[request_number], request_number)
+                    await query.edit_message_text(text=query.message.text + "\n\n✅ Вы отказались от заявки")
+                else:
+                    await query.edit_message_text(text=query.message.text + "\n\n❌ Это не ваша заявка")
+            else:
+                await query.edit_message_text(text=query.message.text + "\n\n❌ Заявка уже неактивна")
+                
+    except Exception as e:
+        logger.error(f"❌ Ошибка в handle_callback: {e}")
+        logger.error(traceback.format_exc())
 
 
 async def accept_request(update_or_query, context, req_data, request_number, partner, 
                         partner_username, partner_full_name, target_chat_id):
     """Принятие заявки"""
+    import traceback
     
-    req_data['taken_by'] = partner_full_name
-    req_data['taken_by_username'] = partner_username
-    req_data['taken_by_id'] = partner.id
-    req_data['status'] = REQUEST_STATUS_ASSIGNED
-    req_data['taken_at'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    logger.info(f"✅ @{partner_username} взял заявку №{request_number}")
-    
-    # Сообщение в чат
-    await context.bot.send_message(
-        chat_id=target_chat_id,
-        text=f"🔥 Выдающий партнёр @{partner_username} забрал заявку №{request_number}"
-    )
-    
-    # Информация партнеру
     try:
+        req_data['taken_by'] = partner_full_name
+        req_data['taken_by_username'] = partner_username
+        req_data['taken_by_id'] = partner.id
+        req_data['status'] = REQUEST_STATUS_ASSIGNED
+        req_data['taken_at'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        logger.info(f"✅ @{partner_username} взял заявку №{request_number}")
+        
+        # Сообщение в чат
         await context.bot.send_message(
-            chat_id=partner.id,
-            text=(
-                f"📬 Вы приняли заявку №{request_number}\n\n"
-                f"Инфо по доставке\n"
-                f"   • Адрес: {req_data['address']}\n"
-                f"   • Контакт: {req_data.get('contact', 'Не указан')}\n\n"
-                f"💬 Напишите @{req_data['username']} для деталей\n\n"
-                f"Если не можете выполнить - используйте /my_requests для отказа"
-            ),
-            reply_markup=get_cancel_request_keyboard(request_number)
+            chat_id=target_chat_id,
+            text=f"🔥 Выдающий партнёр @{partner_username} забрал заявку №{request_number}"
         )
-    except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
-    
-    # Уведомление продающему
-    try:
-        if req_data.get('user_id'):
+        
+        # Информация партнеру
+        try:
             await context.bot.send_message(
-                chat_id=req_data['user_id'],
+                chat_id=partner.id,
                 text=(
-                    f"📢 Заявка №{request_number}\n\n"
-                    f"🔥 Партнёр @{partner_username} взял вашу заявку!\n\n"
-                    f"📝 Адрес: {req_data['address']}\n"
-                    f"📞 Контакт: {req_data.get('contact', 'Не указан')}\n\n"
-                    f"💬 Свяжитесь: @{partner_username}"
-                )
+                    f"📬 Вы приняли заявку №{request_number}\n\n"
+                    f"Инфо по доставке\n"
+                    f"   • Адрес: {req_data['address']}\n"
+                    f"   • Контакт: {req_data.get('contact', 'Не указан')}\n\n"
+                    f"💬 Напишите @{req_data['username']} для деталей\n\n"
+                    f"Если не можете выполнить - используйте /my_requests для отказа"
+                ),
+                reply_markup=get_cancel_request_keyboard(request_number)
             )
+        except Exception as e:
+            logger.error(f"❌ Ошибка: {e}")
+        
+        # Уведомление продающему
+        try:
+            if req_data.get('user_id'):
+                await context.bot.send_message(
+                    chat_id=req_data['user_id'],
+                    text=(
+                        f"📢 Заявка №{request_number}\n\n"
+                        f"🔥 Партнёр @{partner_username} взял вашу заявку!\n\n"
+                        f"📝 Адрес: {req_data['address']}\n"
+                        f"📞 Контакт: {req_data.get('contact', 'Не указан')}\n\n"
+                        f"💬 Свяжитесь: @{partner_username}"
+                    )
+                )
+        except Exception as e:
+            logger.error(f"❌ Ошибка уведомления: {e}")
+        
+        # Обновление в таблице
+        update_request_status(request_number, REQUEST_STATUS_ASSIGNED, partner_username)
+        
+        # Ответ, если это reply
+        if hasattr(update_or_query, 'message') and not hasattr(update_or_query, 'edit_message_text'):
+            await update_or_query.message.reply_text(
+                f"✅ Вы взяли заявку №{request_number}. Информация в личке"
+            )
+            
     except Exception as e:
-        logger.error(f"❌ Ошибка уведомления: {e}")
-    
-    # Обновление в таблице
-    update_request_status(request_number, REQUEST_STATUS_ASSIGNED, partner_username)
-    
-    # Ответ, если это reply
-    if hasattr(update_or_query, 'message') and not hasattr(update_or_query, 'edit_message_text'):
-        await update_or_query.message.reply_text(
-            f"✅ Вы взяли заявку №{request_number}. Информация в личке"
-        )
+        logger.error(f"❌ Ошибка в accept_request: {e}")
+        logger.error(traceback.format_exc())
 
 
 async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -765,15 +808,16 @@ async def my_requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def cancel_request(update_or_query, context, req_data, request_number):
     """Отказ от заявки"""
+    import traceback
     
-    req_data['status'] = REQUEST_STATUS_CANCELLED
-    logger.info(f"❌ Партнёр @{req_data['taken_by_username']} отказался от заявки №{request_number}")
-    
-    # Обновляем статус в таблице
-    update_request_status(request_number, REQUEST_STATUS_CANCELLED)
-    
-    # Уведомление продающему партнёру
     try:
+        req_data['status'] = REQUEST_STATUS_CANCELLED
+        logger.info(f"❌ Партнёр @{req_data['taken_by_username']} отказался от заявки №{request_number}")
+        
+        # Обновляем статус в таблице
+        update_request_status(request_number, REQUEST_STATUS_CANCELLED)
+        
+        # Уведомление продающему партнёру
         if req_data.get('user_id'):
             await context.bot.send_message(
                 chat_id=req_data['user_id'],
@@ -786,28 +830,24 @@ async def cancel_request(update_or_query, context, req_data, request_number):
                 )
             )
             logger.info(f"✅ Уведомление об отказе отправлено @{req_data['username']}")
-    except Exception as e:
-        logger.error(f"❌ Ошибка уведомления об отказе: {e}")
-    
-    # Уведомление партнёру, который отказался
-    try:
+        
+        # Уведомление партнёру, который отказался
         await context.bot.send_message(
             chat_id=req_data['taken_by_id'],
             text=f"✅ Вы отказались от заявки №{request_number}"
         )
-    except Exception as e:
-        logger.error(f"❌ Ошибка подтверждения отказа: {e}")
-    
-    # Удаляем кнопку из сообщения в чате
-    try:
+        
+        # Удаляем кнопку из сообщения в чате
         if req_data.get('message_id'):
             await context.bot.edit_message_text(
                 chat_id=int(CHAT_ID),
                 message_id=req_data['message_id'],
                 text=f"📦 Заявка №{request_number}\n📝 Адрес: {req_data['address']}\n👤 От: @{req_data['username']}\n\n❌ ОТКАЗ ПАРТНЁРА @{req_data['taken_by_username']}"
             )
+            
     except Exception as e:
-        logger.error(f"❌ Ошибка обновления сообщения: {e}")
+        logger.error(f"❌ Ошибка в cancel_request: {e}")
+        logger.error(traceback.format_exc())
 
 
 # ========== ФУНКЦИЯ СОЗДАНИЯ APPLICATION ==========
@@ -851,7 +891,6 @@ def create_application():
     return application
 
 
-# ========== ОСНОВНАЯ ФУНКЦИЯ ==========
 # ========== ОСНОВНАЯ ФУНКЦИЯ ==========
 def main():
     """Запуск"""
