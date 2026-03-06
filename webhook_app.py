@@ -56,11 +56,8 @@ try:
     handlers_count = sum(len(h) for h in application.handlers.values())
     logger.info(f"✅ Зарегистрировано обработчиков: {handlers_count}")
     
-    # ИНИЦИАЛИЗИРУЕМ APPLICATION В ГЛОБАЛЬНОМ LOOP
-    logger.info("🔄 Инициализация application...")
-    future = asyncio.run_coroutine_threadsafe(application.initialize(), loop)
-    future.result(timeout=10)
-    logger.info("✅ Application успешно инициализирован")
+    # НЕ ИНИЦИАЛИЗИРУЕМ APPLICATION ЗДЕСЬ!
+    # Он уже инициализирован в bot.py
     
 except ImportError as e:
     logger.error(f"❌ Ошибка импорта: {e}")
