@@ -79,16 +79,25 @@ def webhook():
         update_data = json.loads(json_string)
         update = Update.de_json(update_data, application.bot)
         
-        # Используем ГЛОБАЛЬНЫЙ loop (не закрываем!)
+        # Используем ГЛОБАЛЬНЫЙ loop
         global loop
         if loop.is_closed():
             loop = init_loop()
         
-        # Запускаем обработку в глобальном loop
+        # Запускаем обработку и ЖДЕМ результат (небольшой таймаут)
         logger.info("🔄 Запускаем обработку update...")
-        asyncio.run_coroutine_threadsafe(application.process_update(update), loop)
+        future = asyncio.run_coroutine_threadsafe(application.process_update(update), loop)
         
-        logger.info("✅ Update передан в обработку")
+        # Ждем немного, но не блокируем надолго
+        try:
+            future.result(timeout=5)
+            logger.info("✅ Update обработан успешно")
+        except asyncio.TimeoutError:
+            logger.warning("⚠️ Обработка продолжается в фоне")
+        except Exception as e:
+            logger.error(f"❌ Ошибка при обработке: {e}")
+            logger.error(traceback.format_exc())
+        
         return 'OK', 200
         
     except json.JSONDecodeError as e:
