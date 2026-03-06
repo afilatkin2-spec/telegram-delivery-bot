@@ -14,9 +14,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Создаем Flask приложение
 app = Flask(__name__)
 
-# Импортируем бота
+# Импортируем бота и необходимые классы
 try:
     import bot
     from telegram import Update
@@ -29,49 +30,58 @@ try:
         raise ImportError("Update is None")
         
     logger.info("✅ Бот успешно импортирован")
+    
+    # Проверяем наличие обработчиков
     handlers_count = sum(len(h) for h in application.handlers.values())
     logger.info(f"✅ Зарегистрировано обработчиков: {handlers_count}")
     
-except Exception as e:
+    # Application уже инициализирован в bot.py
+    
+except ImportError as e:
     logger.error(f"❌ Ошибка импорта: {e}")
     application = None
     Update = None
     TOKEN = None
+except Exception as e:
+    logger.error(f"❌ Неожиданная ошибка: {e}")
+    application = None
+    Update = None
+    TOKEN = None
 
+# Секретный путь для вебхука
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "pavdanf")
 logger.info(f"🔑 Секрет: {WEBHOOK_SECRET}")
 
 @app.route(f'/{WEBHOOK_SECRET}', methods=['POST'])
 def webhook():
-    """Обработчик вебхука - СИНХРОННАЯ ВЕРСИЯ"""
+    """Обработчик вебхука - ФИНАЛЬНАЯ ВЕРСИЯ"""
     logger.info("📩 Получен POST запрос")
     
+    # Проверяем, что бот инициализирован
     if application is None or Update is None:
         logger.error("❌ Бот не инициализирован")
         return 'OK', 200
     
     try:
+        # Получаем данные от Telegram
         json_string = request.get_data().decode('utf-8')
         logger.info(f"📦 Данные получены, длина: {len(json_string)}")
         
+        # Парсим update
         update_data = json.loads(json_string)
         update = Update.de_json(update_data, application.bot)
         
-        # СОЗДАЕМ НОВЫЙ LOOP И ЖДЕМ РЕЗУЛЬТАТ
-        logger.info("🔄 Запускаем синхронную обработку...")
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(application.process_update(update))
-            logger.info("✅ Update обработан успешно")
-        except Exception as e:
-            logger.error(f"❌ Ошибка при обработке: {e}")
-            logger.error(traceback.format_exc())
-        finally:
-            loop.close()
+        # Используем asyncio.run() для простоты и надежности
+        # Он создает новый loop и гарантированно его закрывает
+        logger.info("🔄 Запускаем обработку update...")
+        asyncio.run(application.process_update(update))
         
+        logger.info("✅ Update обработан успешно")
         return 'OK', 200
         
+    except json.JSONDecodeError as e:
+        logger.error(f"❌ Ошибка парсинга JSON: {e}")
+        return 'OK', 200
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
         logger.error(traceback.format_exc())
@@ -79,6 +89,7 @@ def webhook():
 
 @app.route('/debug')
 def debug():
+    """Отладочная информация"""
     handlers = 0
     if application:
         handlers = sum(len(h) for h in application.handlers.values())
@@ -92,7 +103,10 @@ def debug():
 
 @app.route('/')
 def index():
-    return jsonify({"status": "running"})
+    return jsonify({
+        "status": "running",
+        "message": "Telegram bot is running on Railway!"
+    })
 
 @app.route('/health')
 def health():
