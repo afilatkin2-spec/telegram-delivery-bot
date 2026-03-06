@@ -76,11 +76,9 @@ if application:
 
 @app.route(f'/{WEBHOOK_SECRET}', methods=['POST'])
 def webhook():
-    """Обработчик вебхука"""
-    start_time = time.time()
+    """Обработчик вебхука - НЕБЛОКИРУЮЩАЯ ВЕРСИЯ"""
     logger.info("📩 Получен POST запрос на webhook")
     
-    # Проверяем базовые условия
     if request.method != 'POST':
         return jsonify({"error": "Method not allowed"}), 405
     
@@ -91,39 +89,28 @@ def webhook():
     try:
         # Получаем данные
         json_string = request.get_data().decode('utf-8')
-        logger.info(f"📦 Получены данные от пользователя (первые 100 символов): {json_string[:100]}...")
         
         # Парсим update
-        parse_start = time.time()
         update_data = json.loads(json_string)
         update = Update.de_json(update_data, application.bot)
-        logger.info(f"✅ JSON распарсен за {time.time() - parse_start:.2f} сек")
         
         # Используем глобальный loop
         global loop
         if loop.is_closed():
-            logger.warning("⚠️ Loop был закрыт, создаем новый")
             loop = init_loop()
         
-        # Обрабатываем update с увеличенным таймаутом
-        process_start = time.time()
-        future = asyncio.run_coroutine_threadsafe(application.process_update(update), loop)
+        # НЕ БЛОКИРУЕМ ПОТОК - запускаем в фоне
+        asyncio.run_coroutine_threadsafe(application.process_update(update), loop)
         
-        try:
-            future.result(timeout=60)  # Увеличили до 60 секунд
-            logger.info(f"✅ Webhook обработан успешно за {time.time() - process_start:.2f} сек")
-            logger.info(f"⏱️ Общее время обработки: {time.time() - start_time:.2f} сек")
-            return 'OK', 200
-        except asyncio.TimeoutError:
-            logger.error(f"❌ Таймаут обработки после {time.time() - process_start:.2f} сек")
-            # Не закрываем future, пусть продолжает работу в фоне
-            return jsonify({"error": "Processing timeout"}), 500
+        # СРАЗУ ВОЗВРАЩАЕМ ОТВЕТ
+        logger.info("✅ Webhook принят в обработку")
+        return 'OK', 200
         
     except json.JSONDecodeError as e:
         logger.error(f"❌ Ошибка парсинга JSON: {e}")
         return jsonify({"error": f"Invalid JSON: {e}"}), 400
     except Exception as e:
-        logger.error(f"❌ Ошибка: {e}\n{traceback.format_exc()}")
+        logger.error(f"❌ Ошибка: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/set_webhook', methods=['GET'])
