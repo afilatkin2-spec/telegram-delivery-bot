@@ -1,12 +1,14 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request
 import json
 import logging
 import os
 import sys
 import asyncio
+from functools import wraps
 
+# Настройка логирования
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
     stream=sys.stdout
 )
@@ -14,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Глобальный event loop - один на всё приложение
+# Глобальный event loop (один на всё приложение)
 loop = None
 
 def init_loop():
@@ -28,80 +30,124 @@ def init_loop():
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+    logger.info("✅ Event loop инициализирован")
     return loop
 
-# Инициализируем loop при старте
+# Инициализируем loop сразу при загрузке
 init_loop()
-logger.info("✅ Глобальный event loop инициализирован")
 
 # Импортируем бота
 try:
-    import bot
+    from bot import create_application
     from telegram import Update
-    application = bot.application
-    TOKEN = bot.TOKEN
-    logger.info("✅ Бот импортирован")
+    
+    logger.info("🔄 Создаем и инициализируем application...")
+    
+    # Создаем application
+    application = create_application()
+    
+    # Инициализируем application в нашем loop
+    loop.run_until_complete(application.initialize())
+    logger.info("✅ Application успешно создан и инициализирован")
+    
 except Exception as e:
-    logger.error(f"❌ Ошибка импорта: {e}")
+    logger.error(f"❌ Ошибка при создании application: {e}")
     application = None
-    Update = None
 
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "pavdanf")
-logger.info(f"🔑 Секрет: {WEBHOOK_SECRET}")
+# Секретный путь для вебхука
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "telegram-webhook-secret")
 
-@app.route(f'/{WEBHOOK_SECRET}', methods=['POST'])
-def webhook():
-    """Обработчик вебхука"""
-    logger.info("📩 Получен POST запрос")
-    
-    if application is None or Update is None:
-        logger.error("❌ Бот не инициализирован")
-        return 'OK', 200
-    
-    try:
-        json_string = request.get_data().decode('utf-8')
-        logger.info(f"📦 Данные получены, длина: {len(json_string)}")
-        
-        update_data = json.loads(json_string)
-        update = Update.de_json(update_data, application.bot)
-        
-        # Используем ГЛОБАЛЬНЫЙ loop, не закрываем его!
+def async_route(f):
+    """Декоратор для асинхронных route"""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
         global loop
-        if loop.is_closed():
-            loop = init_loop()
-        
-        # Запускаем обработку в глобальном loop
-        future = asyncio.run_coroutine_threadsafe(application.process_update(update), loop)
-        
-        # Добавляем callback для логирования ошибок
-        def handle_future(future):
-            try:
-                future.result()
-                logger.info("✅ Update обработан успешно")
-            except Exception as e:
-                logger.error(f"❌ Ошибка обработки: {e}")
-        
-        future.add_done_callback(handle_future)
-        
-        logger.info("✅ Update передан в обработку")
-        return 'OK', 200
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
-        return 'OK', 200
-
-@app.route('/debug')
-def debug():
-    return jsonify({
-        "bot_imported": application is not None,
-        "loop_exists": loop is not None,
-        "loop_closed": loop.is_closed() if loop else None,
-        "status": "running"
-    })
+        try:
+            # Проверяем, что loop жив
+            if loop.is_closed():
+                logger.warning("⚠️ Loop был закрыт, создаем новый")
+                loop = init_loop()
+            # Запускаем асинхронную функцию в нашем loop
+            return loop.run_until_complete(f(*args, **kwargs))
+        except Exception as e:
+            logger.error(f"❌ Ошибка: {e}")
+            return f"❌ Ошибка: {e}", 500
+    return wrapper
 
 @app.route('/')
 def index():
-    return jsonify({"status": "running"})
+    return json.dumps({
+        "status": "running",
+        "message": "Telegram bot is running on Railway!"
+    }), 200
+
+@app.route('/health')
+def health():
+    return json.dumps({"status": "healthy"}), 200
+
+@app.route(f'/{WEBHOOK_SECRET}', methods=['POST'])
+@async_route
+async def webhook():
+    """Основной эндпоинт для вебхуков Telegram"""
+    if request.method == 'POST':
+        json_string = request.get_data().decode('utf-8')
+        update = Update.de_json(json.loads(json_string), application.bot)
+        
+        # Обрабатываем обновление
+        await application.process_update(update)
+        
+        return 'OK', 200
+    return 'OK', 200
+
+@app.route('/set_webhook', methods=['GET'])
+@async_route
+async def set_webhook():
+    """Эндпоинт для установки вебхука"""
+    railway_url = os.getenv("RAILWAY_PUBLIC_DOMAIN")
+    if not railway_url:
+        railway_url = request.host
+        logger.info(f"Домен из запроса: {railway_url}")
+    
+    webhook_url = f"https://{railway_url}/{WEBHOOK_SECRET}"
+    logger.info(f"Устанавливаем вебхук на: {webhook_url}")
+    
+    # Устанавливаем вебхук
+    success = await application.bot.set_webhook(
+        url=webhook_url,
+        allowed_updates=['message', 'callback_query']
+    )
+    
+    if success:
+        # Получаем информацию о вебхуке
+        webhook_info = await application.bot.get_webhook_info()
+        logger.info(f"✅ Webhook info: {webhook_info}")
+        
+        # Также устанавливаем команды для меню
+        await application.bot.set_my_commands([
+            ('start', 'Запустить бота'),
+            ('status', 'Показать активные заявки')
+        ])
+        
+        return f"✅ Webhook установлен на {webhook_url}", 200
+    else:
+        return "❌ Ошибка установки вебхука", 400
+
+@app.route('/reset', methods=['GET'])
+@async_route
+async def reset():
+    """Полный сброс"""
+    await application.bot.delete_webhook()
+    await application.initialize()
+    return "✅ Бот перезапущен", 200
+
+@app.route('/loop_status', methods=['GET'])
+def loop_status():
+    """Проверка статуса loop"""
+    global loop
+    return json.dumps({
+        "loop_exists": loop is not None,
+        "loop_closed": loop.is_closed() if loop else None
+    }), 200
 
 if __name__ == '__main__':
     port = int(os.getenv("PORT", 8080))
