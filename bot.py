@@ -838,6 +838,7 @@ def create_application():
 
 
 # ========== ОСНОВНАЯ ФУНКЦИЯ ==========
+# ========== ОСНОВНАЯ ФУНКЦИЯ ==========
 def main():
     """Запуск"""
     print("🚀 Запуск бота...")
@@ -865,6 +866,18 @@ if __name__ != '__main__':
     print("🔄 Загрузка для Railway...")
     init_google_sheets()
     application = create_application()
+    
+    # ВАЖНО: Инициализируем application для работы с вебхуками
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(application.initialize())
+        print("✅ Application инициализирован")
+    except Exception as e:
+        print(f"❌ Ошибка инициализации: {e}")
+    finally:
+        loop.close()
+    
     print("✅ Бот загружен")
 
 if __name__ == '__main__':
