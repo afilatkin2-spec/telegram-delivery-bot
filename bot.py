@@ -384,39 +384,45 @@ SIMPLE_INSTRUCTION = """
 # ========== ОБРАБОТЧИКИ ==========
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /start - рабочая версия"""
+    """Команда /start - начинаем с нуля"""
     import traceback
     logger.info("=" * 50)
     logger.info("🔥 ФУНКЦИЯ START ВЫЗВАНА!")
-    logger.info(f"🔥 User ID: {update.effective_user.id}")
-    logger.info(f"🔥 Username: {update.effective_user.username}")
-    logger.info(f"🔥 Chat ID: {update.effective_chat.id}")
-    logger.info(f"🔥 Message text: {update.message.text}")
+    
+    user_id = update.effective_user.id
+    target_chat_id = int(CHAT_ID)
+    
+    # Игнорируем сообщения из чата партнеров
+    if update.effective_chat.id == target_chat_id:
+        await update.message.reply_text("❌ В этом чате доступна только /status")
+        return ConversationHandler.END
     
     try:
-        user_id = update.effective_user.id
-        target_chat_id = int(CHAT_ID)
+        # ========== СБРАСЫВАЕМ СОСТОЯНИЕ ПОЛЬЗОВАТЕЛЯ ==========
+        logger.info(f"🔄 Сбрасываем состояние пользователя {user_id}")
         
-        # Игнорируем сообщения из чата партнеров
-        if update.effective_chat.id == target_chat_id:
-            logger.info("❌ Сообщение из чата партнеров, игнорируем")
-            await update.message.reply_text("❌ В этом чате доступна только /status")
-            return ConversationHandler.END
+        # Удаляем из user_states, чтобы считался новым
+        if user_id in user_states:
+            del user_states[user_id]
+            logger.info(f"✅ Удален user_states для {user_id}")
         
-        # Простая проверка состояния
-        if user_id not in user_states:
-            user_states[user_id] = False
-            logger.info(f"✅ Новый пользователь {user_id}, показываем инструкцию")
-            await update.message.reply_text(
-                "👋 Добро пожаловать!\n\nНажмите «📋 Инструкция»",
-                reply_markup=get_initial_keyboard()
-            )
-        else:
-            logger.info(f"✅ Возвращающийся пользователь {user_id}, показываем кнопку заявки")
-            await update.message.reply_text(
-                "👋 С возвращением!\n\nНажмите «📝 Оставить заявку»",
-                reply_markup=get_main_keyboard()
-            )
+        # Очищаем временные данные, если есть
+        if user_id in temp_request_data:
+            del temp_request_data[user_id]
+            logger.info(f"✅ Удалены temp_request_data для {user_id}")
+        
+        # Очищаем данные контекста
+        if context.user_data:
+            context.user_data.clear()
+            logger.info(f"✅ Очищен context.user_data для {user_id}")
+        
+        # ========== ПОКАЗЫВАЕМ НАЧАЛЬНЫЙ ЭКРАН ==========
+        logger.info(f"✅ Показываем начальный экран для пользователя {user_id}")
+        
+        await update.message.reply_text(
+            "👋 Добро пожаловать!\n\nНажмите «📋 Инструкция» для начала работы",
+            reply_markup=get_initial_keyboard()
+        )
         
         logger.info(f"✅ /start обработан для пользователя {user_id}")
         
