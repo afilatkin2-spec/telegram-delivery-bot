@@ -29,6 +29,18 @@ try:
     handlers_count = sum(len(h) for h in application.handlers.values())
     logger.info(f"✅ Зарегистрировано обработчиков: {handlers_count}")
     
+    # ИНИЦИАЛИЗИРУЕМ APPLICATION
+    logger.info("🔄 Инициализация application...")
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(application.initialize())
+        logger.info("✅ Application успешно инициализирован")
+    except Exception as e:
+        logger.error(f"❌ Ошибка инициализации: {e}")
+    finally:
+        loop.close()
+    
 except Exception as e:
     logger.error(f"❌ Ошибка импорта: {e}")
     application = None
@@ -41,7 +53,7 @@ logger.info(f"🔑 Секрет: {WEBHOOK_SECRET}")
 
 @app.route(f'/{WEBHOOK_SECRET}', methods=['POST'])
 def webhook():
-    """Обработчик вебхука - СИНХРОННАЯ ВЕРСИЯ"""
+    """Обработчик вебхука"""
     logger.info("📩 Получен POST запрос")
     
     try:
@@ -53,7 +65,7 @@ def webhook():
         update_data = json.loads(json_string)
         update = Update.de_json(update_data, application.bot)
         
-        # СОЗДАЕМ НОВЫЙ LOOP И ЖДЕМ РЕЗУЛЬТАТ
+        # Создаем новый loop для обработки
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
