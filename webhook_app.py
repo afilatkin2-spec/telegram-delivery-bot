@@ -17,6 +17,26 @@ logger = logging.getLogger(__name__)
 # Создаем Flask приложение
 app = Flask(__name__)
 
+# Глобальный event loop
+loop = None
+
+def init_loop():
+    """Инициализирует глобальный event loop"""
+    global loop
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop
+
+# Инициализируем loop при старте
+init_loop()
+logger.info("✅ Event loop инициализирован")
+
 # Импортируем бота
 try:
     import bot
@@ -29,17 +49,11 @@ try:
     handlers_count = sum(len(h) for h in application.handlers.values())
     logger.info(f"✅ Зарегистрировано обработчиков: {handlers_count}")
     
-    # ИНИЦИАЛИЗИРУЕМ APPLICATION
+    # ИНИЦИАЛИЗИРУЕМ APPLICATION В ГЛОБАЛЬНОМ LOOP
     logger.info("🔄 Инициализация application...")
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(application.initialize())
-        logger.info("✅ Application успешно инициализирован")
-    except Exception as e:
-        logger.error(f"❌ Ошибка инициализации: {e}")
-    finally:
-        loop.close()
+    future = asyncio.run_coroutine_threadsafe(application.initialize(), loop)
+    future.result(timeout=10)
+    logger.info("✅ Application успешно инициализирован")
     
 except Exception as e:
     logger.error(f"❌ Ошибка импорта: {e}")
@@ -65,19 +79,16 @@ def webhook():
         update_data = json.loads(json_string)
         update = Update.de_json(update_data, application.bot)
         
-        # Создаем новый loop для обработки
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            logger.info("🔄 Запускаем обработку update...")
-            loop.run_until_complete(application.process_update(update))
-            logger.info("✅ Update обработан успешно")
-        except Exception as e:
-            logger.error(f"❌ Ошибка при обработке update: {e}")
-            logger.error(traceback.format_exc())
-        finally:
-            loop.close()
+        # Используем ГЛОБАЛЬНЫЙ loop (не закрываем!)
+        global loop
+        if loop.is_closed():
+            loop = init_loop()
         
+        # Запускаем обработку в глобальном loop
+        logger.info("🔄 Запускаем обработку update...")
+        asyncio.run_coroutine_threadsafe(application.process_update(update), loop)
+        
+        logger.info("✅ Update передан в обработку")
         return 'OK', 200
         
     except json.JSONDecodeError as e:
@@ -98,7 +109,8 @@ def debug():
     return jsonify({
         "bot_imported": application is not None,
         "handlers_count": handlers,
-        "webhook_secret": WEBHOOK_SECRET
+        "webhook_secret": WEBHOOK_SECRET,
+        "loop_closed": loop.is_closed() if loop else None
     })
 
 @app.route('/')
