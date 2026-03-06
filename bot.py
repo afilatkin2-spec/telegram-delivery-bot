@@ -381,30 +381,45 @@ SIMPLE_INSTRUCTION = """
 
 # ========== ОБРАБОТЧИКИ ==========
 
+#async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  #  """Команда /start"""
+   # user_id = update.effective_user.id
+  #  target_chat_id = int(CHAT_ID)
+    
+    #if update.effective_chat.id == target_chat_id:
+       # await update.message.reply_text("❌ В этом чате доступна только /status")
+        #return ConversationHandler.END
+    
+    #if user_id not in user_states:
+       # user_states[user_id] = False
+       # await update.message.reply_text(
+           # "👋 Добро пожаловать!\n\nНажмите «📋 Инструкция»",
+           # reply_markup=get_initial_keyboard()
+     #   )
+   # else:
+     #   await update.message.reply_text(
+            "👋 С возвращением!\n\nНажмите «📝 Оставить заявку»",
+            reply_markup=get_main_keyboard()
+      #  )
+    
+  #  return ConversationHandler.END
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /start"""
+    """УПРОЩЕННЫЙ обработчик команды /start для теста"""
     user_id = update.effective_user.id
     target_chat_id = int(CHAT_ID)
     
+    # Игнорируем сообщения из чата партнеров
     if update.effective_chat.id == target_chat_id:
-        await update.message.reply_text("❌ В этом чате доступна только /status")
         return ConversationHandler.END
-    
-    if user_id not in user_states:
-        user_states[user_id] = False
-        await update.message.reply_text(
-            "👋 Добро пожаловать!\n\nНажмите «📋 Инструкция»",
-            reply_markup=get_initial_keyboard()
-        )
-    else:
-        await update.message.reply_text(
-            "👋 С возвращением!\n\nНажмите «📝 Оставить заявку»",
-            reply_markup=get_main_keyboard()
-        )
-    
+
+    # Отправляем простое сообщение без всяких условий
+    await update.message.reply_text(
+        "👋 Это тестовый ответ! Бот работает."
+    )
+    logger.info(f"✅ Упрощенный start сработал для пользователя {user_id}")
     return ConversationHandler.END
-
-
+    
 async def instruction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает инструкцию"""
     user_id = update.effective_user.id
