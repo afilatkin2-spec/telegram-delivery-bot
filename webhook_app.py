@@ -17,26 +17,6 @@ logger = logging.getLogger(__name__)
 # Создаем Flask приложение
 app = Flask(__name__)
 
-# Глобальный event loop
-loop = None
-
-def init_loop():
-    """Инициализирует глобальный event loop"""
-    global loop
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_closed():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop
-
-# Инициализируем loop при старте
-init_loop()
-logger.info("✅ Event loop инициализирован")
-
 # Импортируем бота
 try:
     import bot
@@ -61,7 +41,7 @@ logger.info(f"🔑 Секрет: {WEBHOOK_SECRET}")
 
 @app.route(f'/{WEBHOOK_SECRET}', methods=['POST'])
 def webhook():
-    """Обработчик вебхука"""
+    """Обработчик вебхука - СИНХРОННАЯ ВЕРСИЯ"""
     logger.info("📩 Получен POST запрос")
     
     try:
@@ -73,26 +53,19 @@ def webhook():
         update_data = json.loads(json_string)
         update = Update.de_json(update_data, application.bot)
         
-        # Используем глобальный loop
-        global loop
-        if loop.is_closed():
-            loop = init_loop()
+        # СОЗДАЕМ НОВЫЙ LOOP И ЖДЕМ РЕЗУЛЬТАТ
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            logger.info("🔄 Запускаем обработку update...")
+            loop.run_until_complete(application.process_update(update))
+            logger.info("✅ Update обработан успешно")
+        except Exception as e:
+            logger.error(f"❌ Ошибка при обработке update: {e}")
+            logger.error(traceback.format_exc())
+        finally:
+            loop.close()
         
-        # Запускаем обработку и добавляем callback для отслеживания ошибок
-        future = asyncio.run_coroutine_threadsafe(application.process_update(update), loop)
-        
-        # Добавляем callback для логирования результата
-        def handle_done(future):
-            try:
-                future.result()  # Это выбросит исключение, если оно было
-                logger.info("✅ Обработка update успешно завершена")
-            except Exception as e:
-                logger.error(f"❌ Ошибка при обработке update: {e}")
-                logger.error(traceback.format_exc())
-        
-        future.add_done_callback(handle_done)
-        
-        logger.info("✅ Update передан в обработку")
         return 'OK', 200
         
     except json.JSONDecodeError as e:
@@ -113,8 +86,7 @@ def debug():
     return jsonify({
         "bot_imported": application is not None,
         "handlers_count": handlers,
-        "webhook_secret": WEBHOOK_SECRET,
-        "loop_closed": loop.is_closed() if loop else None
+        "webhook_secret": WEBHOOK_SECRET
     })
 
 @app.route('/')
