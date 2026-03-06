@@ -5,7 +5,6 @@ import os
 import sys
 import asyncio
 import traceback
-import time
 
 # Настройка логирования
 logging.basicConfig(
@@ -54,6 +53,8 @@ try:
     application = bot.application
     TOKEN = bot.TOKEN
     logger.info("✅ Бот успешно импортирован из bot.py")
+    logger.info(f"✅ Application type: {type(application)}")
+    logger.info(f"✅ Application handlers: {len(application.handlers) if application else 0}")
 except Exception as e:
     logger.error(f"❌ Ошибка при импорте бота: {e}")
     application = None
@@ -71,6 +72,11 @@ if application:
         loop = init_loop()
         loop.run_until_complete(application.initialize())
         logger.info("✅ Application успешно инициализирован")
+        
+        # Проверяем наличие обработчиков
+        handlers_count = sum(len(h) for h in application.handlers.values())
+        logger.info(f"✅ Зарегистрировано обработчиков: {handlers_count}")
+        
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации application: {e}")
 
@@ -89,10 +95,18 @@ def webhook():
     try:
         # Получаем данные
         json_string = request.get_data().decode('utf-8')
+        logger.info(f"📦 Получены данные, длина: {len(json_string)}")
         
         # Парсим update
         update_data = json.loads(json_string)
         update = Update.de_json(update_data, application.bot)
+        
+        # Проверяем тип update
+        if update.message:
+            logger.info(f"📨 Получено сообщение от пользователя {update.message.from_user.id}")
+            logger.info(f"📝 Текст сообщения: {update.message.text}")
+        elif update.callback_query:
+            logger.info(f"🔘 Получен callback query")
         
         # Используем глобальный loop
         global loop
@@ -103,14 +117,14 @@ def webhook():
         asyncio.run_coroutine_threadsafe(application.process_update(update), loop)
         
         # СРАЗУ ВОЗВРАЩАЕМ ОТВЕТ
-        logger.info("✅ Webhook принят в обработку")
+        logger.info("✅ Webhook передан в обработку")
         return 'OK', 200
         
     except json.JSONDecodeError as e:
         logger.error(f"❌ Ошибка парсинга JSON: {e}")
         return jsonify({"error": f"Invalid JSON: {e}"}), 400
     except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
+        logger.error(f"❌ Ошибка: {e}\n{traceback.format_exc()}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/set_webhook', methods=['GET'])
@@ -158,40 +172,18 @@ def webhook_info():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/delete_webhook', methods=['GET'])
-def delete_webhook():
-    """Удаление вебхука"""
-    if not REQUESTS_AVAILABLE:
-        return jsonify({"error": "requests not available"}), 500
-    
-    try:
-        api_url = f"https://api.telegram.org/bot{TOKEN}/deleteWebhook"
-        params = {"drop_pending_updates": True}
-        response = requests.get(api_url, params=params, timeout=10)
-        return jsonify(response.json())
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/force_init', methods=['GET'])
-def force_init():
-    """Принудительная инициализация"""
-    try:
-        global loop
-        if loop.is_closed():
-            loop = init_loop()
-        
-        loop.run_until_complete(application.initialize())
-        return jsonify({"success": True, "message": "Application initialized"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 @app.route('/debug')
 def debug():
     """Отладочная информация"""
+    handlers_count = 0
+    if application and hasattr(application, 'handlers'):
+        handlers_count = sum(len(h) for h in application.handlers.values())
+    
     return jsonify({
         "bot_imported": 'bot' in sys.modules,
         "application_exists": application is not None,
         "update_exists": Update is not None,
+        "handlers_count": handlers_count,
         "webhook_secret": WEBHOOK_SECRET,
         "requests_available": REQUESTS_AVAILABLE,
         "loop_closed": loop.is_closed() if loop else None,
