@@ -1,9 +1,6 @@
 import logging
 import re
 import sys
-import os
-import json
-import asyncio
 from difflib import SequenceMatcher
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -27,11 +24,11 @@ from oauth2client.service_account import ServiceAccountCredentials
 from google.auth.exceptions import GoogleAuthError
 
 # ========== НАСТРОЙКИ ==========
-TOKEN = os.getenv("TOKEN", "8221169246:AAFtryjOLkI2_ADQvZK5rvXLcJrgsJYnmX8")
-CHAT_ID = os.getenv("CHAT_ID", "-4615357290")
-SPREADSHEET_URL = os.getenv("SPREADSHEET_URL", "https://docs.google.com/spreadsheets/d/1-0CLwe15mNEHf81-bUVhVG0IJIIMF6PtvKfSDSh10xs/edit")
-SHEET_NAME = os.getenv("SHEET_NAME", "Города")
-REPORT_SHEET_NAME = os.getenv("REPORT_SHEET_NAME", "Отчётность")
+TOKEN = "8221169246:AAFtryjOLkI2_ADQvZK5rvXLcJrgsJYnmX8"
+CHAT_ID = "-4615357290"  # Оставляем как есть, с минусом
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1-0CLwe15mNEHf81-bUVhVG0IJIIMF6PtvKfSDSh10xs/edit"
+SHEET_NAME = "Города"
+REPORT_SHEET_NAME = "Отчётность"
 
 # Состояния для ConversationHandler
 ADDRESS, CONTACT = range(2)
@@ -647,7 +644,7 @@ async def accept_request(update_or_query, context, req_data, request_number, par
     except Exception as e:
         logger.error(f"❌ Не удалось отправить личное сообщение партнеру {partner.id}: {e}")
     
-    # 4. Отправляем уведомление продающему партнёру
+    # 4. Отправляем уведомление продающему партнёру (НОВОЕ!)
     try:
         seller_id = req_data.get('user_id')
         if seller_id:
@@ -868,19 +865,8 @@ if __name__ != '__main__':
     init_google_sheets()
     # Создаем и настраиваем application
     application = create_application()
-    
-    # ВАЖНО: Инициализируем application для работы с вебхуками
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(application.initialize())
-        print("✅ Application инициализирован")
-    except Exception as e:
-        print(f"❌ Ошибка инициализации: {e}")
-    finally:
-        loop.close()
-    
     print(f"✅ Бот загружен для Railway, application создан")
+
 
 if __name__ == '__main__':
     try:
