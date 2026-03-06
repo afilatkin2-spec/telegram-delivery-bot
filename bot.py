@@ -52,11 +52,10 @@ REQUEST_STATUS_CANCELLED = "отказ партнёра"
 REQUEST_TIMEOUT_MINUTES = 10
 
 # Настройка логирования
-# Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
-    stream=sys.stdout  # ЭТО ВАЖНО!
+    stream=sys.stdout
 )
 logger = logging.getLogger(__name__)
 
@@ -226,7 +225,7 @@ def update_request_status(request_number: int, status: str, taken_by_username: s
         return False
 
 
-# ========== НОВАЯ ФУНКЦИЯ ДЛЯ ПРОВЕРКИ ПРОСРОЧЕННЫХ ЗАЯВОК ==========
+# ========== ФУНКЦИЯ ДЛЯ ПРОВЕРКИ ПРОСРОЧЕННЫХ ЗАЯВОК ==========
 async def check_expired_requests(context: ContextTypes.DEFAULT_TYPE):
     """Проверяет просроченные заявки и отправляет уведомления"""
     logger.info("🔍 Проверка просроченных заявок...")
@@ -398,7 +397,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     
     try:
-        # ========== СБРАСЫВАЕМ СОСТОЯНИЕ ПОЛЬЗОВАТЕЛЯ ==========
+        # Сбрасываем состояние пользователя
         logger.info(f"🔄 Сбрасываем состояние пользователя {user_id}")
         
         # Удаляем из user_states, чтобы считался новым
@@ -416,7 +415,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.clear()
             logger.info(f"✅ Очищен context.user_data для {user_id}")
         
-        # ========== ПОКАЗЫВАЕМ НАЧАЛЬНЫЙ ЭКРАН ==========
+        # Показываем начальный экран
         logger.info(f"✅ Показываем начальный экран для пользователя {user_id}")
         
         await update.message.reply_text(
@@ -433,42 +432,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("=" * 50)
     return ConversationHandler.END
 
-#async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-   # """Команда /start"""
-   # user_id = update.effective_user.id
-   # target_chat_id = int(CHAT_ID)
-    
-   # # Игнорируем сообщения из чата партнеров
-   # if update.effective_chat.id == target_chat_id:
-    #    await update.message.reply_text("❌ В этом чате доступна только /status")
-    #    return ConversationHandler.END
-    
-  #  # Простая проверка состояния без сложной логики
-   # if user_id not in user_states:
-    #    user_states[user_id] = False
-     #   await update.message.reply_text(
-            #"👋 Добро пожаловать!\n\nНажмите «📋 Инструкция»",
-       #     reply_markup=get_initial_keyboard()
-      #  )
-  #  else:
-       # await update.message.reply_text(
-        #    "👋 С возвращением!\n\nНажмите «📝 Оставить заявку»",
-        #    reply_markup=get_main_keyboard()
-        #)
-    
-   # logger.info(f"✅ /start обработан для пользователя {user_id}")
-   # return ConversationHandler.END
 
 async def instruction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает инструкцию"""
     user_id = update.effective_user.id
-    await update.message.reply_text(SIMPLE_INSTRUCTION, parse_mode='Markdown', reply_markup=get_main_keyboard())
-    user_states[user_id] = True
+    logger.info(f"📋 ИНСТРУКЦИЯ вызвана для пользователя {user_id}")
+    
+    try:
+        await update.message.reply_text(
+            SIMPLE_INSTRUCTION, 
+            parse_mode='Markdown', 
+            reply_markup=get_main_keyboard()
+        )
+        user_states[user_id] = True
+        logger.info(f"✅ Инструкция показана пользователю {user_id}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка в instruction: {e}")
+    
     return ConversationHandler.END
 
 
 async def start_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало создания заявки"""
+    logger.info(f"📝 start_request вызван пользователем {update.effective_user.id}")
     await update.message.reply_text("Введите адрес доставки:", reply_markup=get_cancel_keyboard())
     return ADDRESS
 
@@ -477,6 +463,7 @@ async def handle_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка адреса"""
     user_id = update.effective_user.id
     user_address = update.message.text
+    logger.info(f"📍 Обработка адреса от {user_id}: {user_address}")
     
     if user_id not in temp_request_data:
         temp_request_data[user_id] = {}
