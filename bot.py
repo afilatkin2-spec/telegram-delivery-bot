@@ -382,10 +382,15 @@ SIMPLE_INSTRUCTION = """
 
 
 # ========== ОБРАБОТЧИКИ ==========
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start - начинаем с нуля"""
     import traceback
+    import sys
+    
+    # ПРИНУДИТЕЛЬНЫЙ ВЫВОД (ДАЖЕ ЕСЛИ ЛОГИ НЕ РАБОТАЮТ)
+    print("🔥🔥🔥 START ВЫЗВАН! 🔥🔥🔥", file=sys.stdout)
+    sys.stdout.flush()
+    
     logger.info("=" * 50)
     logger.info("🔥 ФУНКЦИЯ START ВЫЗВАНА!")
     
@@ -400,6 +405,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # Сбрасываем состояние пользователя
         logger.info(f"🔄 Сбрасываем состояние пользователя {user_id}")
+        print(f"🔄 Сбрасываем состояние пользователя {user_id}", file=sys.stdout)
+        sys.stdout.flush()
         
         # Удаляем из user_states, чтобы считался новым
         if user_id in user_states:
@@ -418,6 +425,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Показываем начальный экран
         logger.info(f"✅ Показываем начальный экран для пользователя {user_id}")
+        print(f"✅ Отправляем сообщение пользователю {user_id}", file=sys.stdout)
+        sys.stdout.flush()
         
         await update.message.reply_text(
             "👋 Добро пожаловать!\n\nНажмите «📋 Инструкция» для начала работы",
@@ -425,10 +434,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         logger.info(f"✅ /start обработан для пользователя {user_id}")
+        print(f"✅ /start завершен для пользователя {user_id}", file=sys.stdout)
+        sys.stdout.flush()
         
     except Exception as e:
         logger.error(f"❌ Ошибка в start: {e}")
+        print(f"❌ Ошибка: {e}", file=sys.stdout)
         logger.error(traceback.format_exc())
+        sys.stdout.flush()
     
     logger.info("=" * 50)
     return ConversationHandler.END
