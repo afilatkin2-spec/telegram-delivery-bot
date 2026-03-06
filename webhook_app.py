@@ -45,16 +45,10 @@ def async_route(f):
         global loop
         if loop.is_closed():
             loop = init_loop()
-        # Запускаем асинхронную функцию в глобальном loop
-        future = asyncio.run_coroutine_threadsafe(f(*args, **kwargs), loop)
-        try:
-            return future.result(timeout=30)
-        except asyncio.TimeoutError:
-            logger.error("❌ Таймаут выполнения")
-            return jsonify({"error": "Timeout"}), 500
-        except Exception as e:
-            logger.error(f"❌ Ошибка: {e}")
-            return jsonify({"error": str(e)}), 500
+        # Запускаем асинхронную функцию в глобальном loop НЕ ЖДЕМ РЕЗУЛЬТАТА
+        asyncio.run_coroutine_threadsafe(f(*args, **kwargs), loop)
+        # Сразу возвращаем OK, не ждем выполнения
+        return jsonify({"status": "accepted"}), 202
     return wrapper
 
 # Импортируем бота
@@ -97,7 +91,7 @@ async def webhook():
     
     if application is None or Update is None:
         logger.error("❌ Бот не инициализирован")
-        return jsonify({"error": "Bot not initialized"}), 200
+        return
     
     try:
         json_string = request.get_data().decode('utf-8')
@@ -110,15 +104,12 @@ async def webhook():
         await application.process_update(update)
         
         logger.info("✅ Update обработан успешно")
-        return jsonify({"status": "ok"}), 200
         
     except json.JSONDecodeError as e:
         logger.error(f"❌ Ошибка парсинга JSON: {e}")
-        return jsonify({"error": "Invalid JSON"}), 200
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
         logger.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 200
 
 @app.route('/debug')
 def debug():
