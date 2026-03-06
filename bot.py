@@ -52,9 +52,11 @@ REQUEST_STATUS_CANCELLED = "отказ партнёра"
 REQUEST_TIMEOUT_MINUTES = 10
 
 # Настройка логирования
+# Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.INFO,
+    stream=sys.stdout  # ЭТО ВАЖНО!
 )
 logger = logging.getLogger(__name__)
 
