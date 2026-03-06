@@ -14,6 +14,26 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# Глобальный event loop - один на всё приложение
+loop = None
+
+def init_loop():
+    """Инициализирует глобальный event loop"""
+    global loop
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop
+
+# Инициализируем loop при старте
+init_loop()
+logger.info("✅ Глобальный event loop инициализирован")
+
 # Импортируем бота
 try:
     import bot
@@ -45,17 +65,25 @@ def webhook():
         update_data = json.loads(json_string)
         update = Update.de_json(update_data, application.bot)
         
-        # Создаем новый loop для каждого запроса
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(application.process_update(update))
-            logger.info("✅ Update обработан")
-        except Exception as e:
-            logger.error(f"❌ Ошибка: {e}")
-        finally:
-            loop.close()
+        # Используем ГЛОБАЛЬНЫЙ loop, не закрываем его!
+        global loop
+        if loop.is_closed():
+            loop = init_loop()
         
+        # Запускаем обработку в глобальном loop
+        future = asyncio.run_coroutine_threadsafe(application.process_update(update), loop)
+        
+        # Добавляем callback для логирования ошибок
+        def handle_future(future):
+            try:
+                future.result()
+                logger.info("✅ Update обработан успешно")
+            except Exception as e:
+                logger.error(f"❌ Ошибка обработки: {e}")
+        
+        future.add_done_callback(handle_future)
+        
+        logger.info("✅ Update передан в обработку")
         return 'OK', 200
         
     except Exception as e:
@@ -66,9 +94,15 @@ def webhook():
 def debug():
     return jsonify({
         "bot_imported": application is not None,
+        "loop_exists": loop is not None,
+        "loop_closed": loop.is_closed() if loop else None,
         "status": "running"
     })
 
 @app.route('/')
 def index():
     return jsonify({"status": "running"})
+
+if __name__ == '__main__':
+    port = int(os.getenv("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
