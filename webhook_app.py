@@ -37,14 +37,13 @@ def init_loop():
 init_loop()
 logger.info("✅ Event loop инициализирован")
 
-# Импортируем бота и необходимые классы
+# Импортируем бота
 try:
     import bot
     from telegram import Update
     application = bot.application
     TOKEN = bot.TOKEN
     
-    # Проверяем, что все импортировалось корректно
     if application is None:
         raise ImportError("application is None")
     if Update is None:
@@ -52,12 +51,10 @@ try:
         
     logger.info("✅ Бот успешно импортирован")
     
-    # Проверяем наличие обработчиков
     handlers_count = sum(len(h) for h in application.handlers.values())
     logger.info(f"✅ Зарегистрировано обработчиков: {handlers_count}")
     
-    # НЕ ИНИЦИАЛИЗИРУЕМ APPLICATION ЗДЕСЬ!
-    # Он уже инициализирован в bot.py
+    # Application уже инициализирован в bot.py
     
 except ImportError as e:
     logger.error(f"❌ Ошибка импорта: {e}")
@@ -70,7 +67,6 @@ except Exception as e:
     Update = None
     TOKEN = None
 
-# Секретный путь для вебхука
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "pavdanf")
 logger.info(f"🔑 Секрет: {WEBHOOK_SECRET}")
 
@@ -79,39 +75,37 @@ def webhook():
     """Обработчик вебхука"""
     logger.info("📩 Получен POST запрос")
     
-    # Проверяем, что бот инициализирован
     if application is None or Update is None:
         logger.error("❌ Бот не инициализирован")
         return 'OK', 200
     
     try:
-        # Получаем данные
         json_string = request.get_data().decode('utf-8')
         logger.info(f"📦 Данные получены, длина: {len(json_string)}")
         
-        # Парсим update
         update_data = json.loads(json_string)
         update = Update.de_json(update_data, application.bot)
         
-        # Используем ГЛОБАЛЬНЫЙ loop
         global loop
         if loop.is_closed():
             loop = init_loop()
         
-        # Запускаем обработку
         logger.info("🔄 Запускаем обработку update...")
+        
+        # ВАЖНО: создаем задачу и ДОБАВЛЯЕМ CALLBACK для отслеживания
         future = asyncio.run_coroutine_threadsafe(application.process_update(update), loop)
         
-        # Ждем немного, но не блокируем надолго
-        try:
-            future.result(timeout=5)
-            logger.info("✅ Update обработан успешно")
-        except asyncio.TimeoutError:
-            logger.warning("⚠️ Обработка продолжается в фоне")
-        except Exception as e:
-            logger.error(f"❌ Ошибка при обработке: {e}")
-            logger.error(traceback.format_exc())
+        def handle_future(future):
+            try:
+                future.result()  # Получаем результат или исключение
+                logger.info("✅ Update обработан успешно")
+            except Exception as e:
+                logger.error(f"❌ Ошибка обработки update: {e}")
+                logger.error(traceback.format_exc())
         
+        future.add_done_callback(handle_future)
+        
+        logger.info("✅ Update передан в обработку")
         return 'OK', 200
         
     except json.JSONDecodeError as e:
@@ -124,7 +118,6 @@ def webhook():
 
 @app.route('/debug')
 def debug():
-    """Отладочная информация"""
     handlers = 0
     if application:
         handlers = sum(len(h) for h in application.handlers.values())
