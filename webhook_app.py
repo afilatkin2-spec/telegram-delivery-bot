@@ -1,4 +1,3 @@
-#
 from flask import Flask, request, jsonify
 import json
 import logging
@@ -6,7 +5,6 @@ import os
 import sys
 import asyncio
 import traceback
-from functools import wraps
 
 # Настройка логирования
 logging.basicConfig(
@@ -19,7 +17,7 @@ logger = logging.getLogger(__name__)
 # Создаем Flask приложение
 app = Flask(__name__)
 
-# Глобальный event loop - один на всё приложение
+# Глобальный event loop
 loop = None
 
 def init_loop():
@@ -39,19 +37,6 @@ def init_loop():
 # Инициализируем loop при старте
 init_loop()
 
-# Декоратор для асинхронных функций в Flask
-def async_route(f):
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        global loop
-        if loop.is_closed():
-            loop = init_loop()
-        # Запускаем асинхронную функцию в глобальном loop НЕ ЖДЕМ РЕЗУЛЬТАТА
-        asyncio.run_coroutine_threadsafe(f(*args, **kwargs), loop)
-        # Сразу возвращаем OK, не ждем выполнения
-        return jsonify({"status": "accepted"}), 202
-    return wrapper
-
 # Импортируем бота
 try:
     import bot
@@ -69,7 +54,7 @@ try:
     handlers_count = sum(len(h) for h in application.handlers.values())
     logger.info(f"✅ Зарегистрировано обработчиков: {handlers_count}")
     
-    # Инициализируем application в глобальном loop
+    # Инициализируем application в глобальном loop и ЖДЕМ результат
     future = asyncio.run_coroutine_threadsafe(application.initialize(), loop)
     future.result(timeout=10)
     logger.info("✅ Application инициализирован")
@@ -85,14 +70,13 @@ WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "pavdanf")
 logger.info(f"🔑 Секрет: {WEBHOOK_SECRET}")
 
 @app.route(f'/{WEBHOOK_SECRET}', methods=['POST'])
-@async_route
-async def webhook():
-    """Обработчик вебхука"""
+def webhook():
+    """Обработчик вебхука - СИНХРОННАЯ ВЕРСИЯ"""
     logger.info("📩 Получен POST запрос")
     
     if application is None or Update is None:
         logger.error("❌ Бот не инициализирован")
-        return
+        return 'OK', 200
     
     try:
         json_string = request.get_data().decode('utf-8')
@@ -101,16 +85,28 @@ async def webhook():
         update_data = json.loads(json_string)
         update = Update.de_json(update_data, application.bot)
         
-        logger.info("🔄 Запускаем обработку update...")
-        await application.process_update(update)
+        # Используем глобальный loop
+        global loop
+        if loop.is_closed():
+            loop = init_loop()
+        
+        # Запускаем и ЖДЕМ результат
+        future = asyncio.run_coroutine_threadsafe(application.process_update(update), loop)
+        future.result(timeout=30)  # Ждем до 30 секунд
         
         logger.info("✅ Update обработан успешно")
+        return 'OK', 200
         
+    except asyncio.TimeoutError:
+        logger.error("❌ Таймаут обработки")
+        return 'OK', 200
     except json.JSONDecodeError as e:
         logger.error(f"❌ Ошибка парсинга JSON: {e}")
+        return 'OK', 200
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
         logger.error(traceback.format_exc())
+        return 'OK', 200
 
 @app.route('/debug')
 def debug():
