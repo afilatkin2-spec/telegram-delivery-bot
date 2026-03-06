@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import asyncio
+import traceback
 
 # Настройка логирования
 logging.basicConfig(
@@ -48,9 +49,6 @@ try:
     handlers_count = sum(len(h) for h in application.handlers.values())
     logger.info(f"✅ Зарегистрировано обработчиков: {handlers_count}")
     
-    # НЕ инициализируем application здесь!
-    # Application уже инициализирован в bot.py при импорте
-    
 except Exception as e:
     logger.error(f"❌ Ошибка импорта: {e}")
     application = None
@@ -80,8 +78,19 @@ def webhook():
         if loop.is_closed():
             loop = init_loop()
         
-        # Запускаем обработку в глобальном loop
-        asyncio.run_coroutine_threadsafe(application.process_update(update), loop)
+        # Запускаем обработку и добавляем callback для отслеживания ошибок
+        future = asyncio.run_coroutine_threadsafe(application.process_update(update), loop)
+        
+        # Добавляем callback для логирования результата
+        def handle_done(future):
+            try:
+                future.result()  # Это выбросит исключение, если оно было
+                logger.info("✅ Обработка update успешно завершена")
+            except Exception as e:
+                logger.error(f"❌ Ошибка при обработке update: {e}")
+                logger.error(traceback.format_exc())
+        
+        future.add_done_callback(handle_done)
         
         logger.info("✅ Update передан в обработку")
         return 'OK', 200
@@ -91,6 +100,7 @@ def webhook():
         return 'OK', 200
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
+        logger.error(traceback.format_exc())
         return 'OK', 200
 
 @app.route('/debug')
