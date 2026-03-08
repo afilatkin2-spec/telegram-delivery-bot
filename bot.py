@@ -1,6 +1,8 @@
 import logging
 import re
 import sys
+import os
+import json
 from difflib import SequenceMatcher
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -21,11 +23,10 @@ except ImportError as e:
 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from google.auth.exceptions import GoogleAuthError
 
 # ========== НАСТРОЙКИ ==========
 TOKEN = "8221169246:AAFtryjOLkI2_ADQvZK5rvXLcJrgsJYnmX8"
-CHAT_ID = "-4615357290"  # Оставляем как есть, с минусом
+CHAT_ID = "-4615357290"
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1-0CLwe15mNEHf81-bUVhVG0IJIIMF6PtvKfSDSh10xs/edit"
 SHEET_NAME = "Города"
 REPORT_SHEET_NAME = "Отчётность"
@@ -35,7 +36,8 @@ ADDRESS, CONTACT = range(2)
 
 # Статусы заявок
 REQUEST_STATUS_CREATED = "создана"
-REQUEST_STATUS_ASSIGNED = "назначен вп"
+REQUEST_STATUS_ASSIGNED = "назначен ВП"
+REQUEST_STATUS_CANCELLED = "отказ ВП"  # НОВЫЙ СТАТУС
 
 # Настройка логирования
 logging.basicConfig(
@@ -50,9 +52,9 @@ request_counter = 1
 user_requests: Dict[int, Dict[str, Any]] = {}
 google_client = None
 report_sheet = None
-user_states: Dict[int, bool] = {}  # Словарь для отслеживания, видел ли пользователь инструкцию
-temp_request_data: Dict[int, Dict[str, Any]] = {}  # Временное хранение данных заявки
-request_row_numbers: Dict[int, int] = {}  # Словарь для хранения номеров строк в Google Sheets
+user_states: Dict[int, bool] = {}
+temp_request_data: Dict[int, Dict[str, Any]] = {}
+request_row_numbers: Dict[int, int] = {}
 
 # Создаем application как глобальную переменную
 application = None
@@ -147,7 +149,6 @@ def setup_report_sheet(spreadsheet):
                 report_sheet.update('A1:H1', [expected_headers])
             elif len(headers) == 7:  # Если старый формат (без статуса)
                 logger.info(f"Добавляем колонку статуса в лист '{REPORT_SHEET_NAME}'")
-                # Добавляем заголовок статуса в колонку H
                 report_sheet.update('H1', 'Статус')
             
         except gspread.WorksheetNotFound:
@@ -172,7 +173,6 @@ def save_request_to_sheet(request_number: int, request_data: Dict):
         return False
     
     try:
-        # Подготавливаем данные для новой заявки (статус "создана")
         row_data = [
             request_number,
             request_data.get('username', ''),
@@ -181,18 +181,17 @@ def save_request_to_sheet(request_number: int, request_data: Dict):
             request_data.get('contact', ''),
             '',  # Ник кто забрал (пока пусто)
             '',  # Время взятия (пока пусто)
-            REQUEST_STATUS_CREATED  # Статус "создана"
+            REQUEST_STATUS_CREATED
         ]
         
         logger.info(f"Сохраняем новую заявку №{request_number} в Google Sheets: {row_data}")
         result = report_sheet.append_row(row_data, value_input_option='USER_ENTERED')
         
         if result:
-            # Получаем номер добавленной строки
             all_rows = report_sheet.get_all_values()
             row_number = len(all_rows)
             request_row_numbers[request_number] = row_number
-            logger.info(f"✅ Заявка №{request_number} сохранена в лист '{REPORT_SHEET_NAME}', строка {row_number}, статус: {REQUEST_STATUS_CREATED}")
+            logger.info(f"✅ Заявка №{request_number} сохранена в лист '{REPORT_SHEET_NAME}', строка {row_number}")
             return True
         else:
             logger.error(f"❌ Не удалось добавить строку для заявки №{request_number}")
@@ -219,7 +218,7 @@ def update_request_status(request_number: int, status: str, taken_by_username: s
             # Если не нашли в словаре, ищем по номеру заявки в таблице
             all_rows = report_sheet.get_all_values()
             for i, row in enumerate(all_rows, start=1):
-                if i > 1 and len(row) > 0 and str(row[0]) == str(request_number):  # Пропускаем заголовок
+                if i > 1 and len(row) > 0 and str(row[0]) == str(request_number):
                     row_number = i
                     request_row_numbers[request_number] = i
                     break
@@ -231,11 +230,9 @@ def update_request_status(request_number: int, status: str, taken_by_username: s
             
             # Если заявка назначена, обновляем также ник и время
             if status == REQUEST_STATUS_ASSIGNED and taken_by_username:
-                # Обновляем ник кто забрал (колонка F - 6-я)
                 report_sheet.update(f'F{row_number}', taken_by_username)
-                # Обновляем время взятия (колонка G - 7-я)
                 report_sheet.update(f'G{row_number}', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-                logger.info(f"✅ Данные назначения для заявки №{request_number} обновлены: взял @{taken_by_username}")
+                logger.info(f"✅ Данные назначения для заявки №{request_number} обновлены")
             
             return True
         else:
@@ -293,30 +290,33 @@ def get_next_request_number() -> int:
 
 # ========== ФУНКЦИИ ДЛЯ КНОПОК ==========
 def get_initial_keyboard():
-    """Клавиатура при первом запуске - только одна кнопка"""
     keyboard = [
         [KeyboardButton("📋 Инструкция")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def get_main_keyboard():
-    """Основная клавиатура с кнопкой заявки"""
     keyboard = [
         [KeyboardButton("📝 Оставить заявку")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def get_cancel_keyboard():
-    """Клавиатура с кнопкой отмены"""
     keyboard = [
         [KeyboardButton("❌ Отменить")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def get_partner_chat_keyboard(request_number: int):
-    """Inline-кнопки для заявки в чате партнеров"""
     keyboard = [
         [InlineKeyboardButton("✅ Забрать заявку", callback_data=f"accept_{request_number}")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+# НОВАЯ КНОПКА ДЛЯ ОТКАЗА
+def get_cancel_request_keyboard(request_number: int):
+    keyboard = [
+        [InlineKeyboardButton("❌ Отказаться от заявки", callback_data=f"cancel_{request_number}")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -332,12 +332,14 @@ SIMPLE_INSTRUCTION = """
 • Получите номер заявки
 • Ожидайте, когда выдающий партнёр её заберёт
 • Вы получите уведомление, когда вашу заявку примут
+• Если партнёр откажется - вы тоже получите уведомление
 
 ⚡️ *Для выдающих партнёров:*
 • Кнопка «✅ Забрать заявку» появится в вашем региональном чате
 • Нажмите её, чтобы принять заявку
 • В личные сообщения придёт информация по доставке
 • Продающий партнёр получит уведомление о том, что вы взяли заявку
+• Если не можете выполнить - используйте /my_requests для отказа
 
 ✅ *Всё просто!* Нажмите «📝 Оставить заявку» для создания заявки
 """
@@ -348,17 +350,14 @@ SIMPLE_INSTRUCTION = """
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start - первый запуск"""
     user_id = update.effective_user.id
-    
-    # Проверяем, что это личное сообщение, а не чат партнеров
     target_chat_id = int(CHAT_ID)
+    
     if update.effective_chat.id == target_chat_id:
-        # В чате партнеров команда /start не работает
         await update.message.reply_text(
             "❌ В этом чате доступна только команда /status"
         )
         return ConversationHandler.END
     
-    # Проверяем, первый ли это запуск
     if user_id not in user_states:
         user_states[user_id] = False
         welcome_text = (
@@ -372,7 +371,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_initial_keyboard()
         )
     else:
-        # Если пользователь уже запускал бота, показываем основную клавиатуру
         welcome_text = (
             "👋 С возвращением!\n\n"
             "Нажмите «📝 Оставить заявку» для создания новой заявки."
@@ -413,25 +411,21 @@ async def handle_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_address = update.message.text
     
-    # Сохраняем адрес во временные данные
     if user_id not in temp_request_data:
         temp_request_data[user_id] = {}
     temp_request_data[user_id]['address'] = user_address
     temp_request_data[user_id]['username'] = update.effective_user.username or f"user_{user_id}"
     
-    # Проверяем, есть ли город в списке
     matched_city = find_matching_city(user_address)
     
     if matched_city:
-        # Город найден - запрашиваем контакт
         await update.message.reply_text(
             "✅ Город найден!\n\n"
             "Теперь укажите способ связи с клиентом:\n"
-            "(телефон, Telegram, любой другой контакт. Впишите конкретный номер или имя пользователя с социальных сетей)"
+            "(телефон, Telegram, любой другой контакт)"
         )
         return CONTACT
     else:
-        # Город не найден
         await update.message.reply_text(
             "❌ Адрес не найден. Отправьте клиенту анкету на доставку через СВК",
             reply_markup=get_main_keyboard()
@@ -445,12 +439,10 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_contact = update.message.text
     target_chat_id = int(CHAT_ID)
     
-    # Получаем данные из временного хранилища
     user_data = temp_request_data.get(user_id, {})
     user_address = user_data.get('address', '')
     username = user_data.get('username', f"user_{user_id}")
     
-    # Создаем заявку
     request_number = get_next_request_number()
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
@@ -464,14 +456,12 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'taken_by_username': None,
         'taken_by_id': None,
         'created_at': current_time,
-        'status': REQUEST_STATUS_CREATED,  # Статус "создана"
+        'status': REQUEST_STATUS_CREATED,
         'message_id': None
     }
     
-    # Сохраняем заявку в Google Sheets (статус "создана")
     save_request_to_sheet(request_number, user_requests[request_number])
     
-    # Отправляем в чат партнеров с кнопкой
     chat_message = (
         f"📦 В вашем регионе есть новая заявка на доставку №{request_number}\n"
         f"📝 Адрес: {user_address}\n"
@@ -487,7 +477,6 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_requests[request_number]['message_id'] = sent_message.message_id
     logger.info(f"   Сообщение в чат отправлено, ID: {sent_message.message_id}")
     
-    # Подтверждение пользователю
     await update.message.reply_text(
         f"✅ Заявка №{request_number} отправлена, с вами свяжется партнёр.\n"
         f"Контакт клиента сохранён: {user_contact}\n\n"
@@ -495,11 +484,10 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_keyboard()
     )
     
-    # Очищаем временные данные
     if user_id in temp_request_data:
         del temp_request_data[user_id]
     
-    logger.info(f"✅ Создана заявка №{request_number} с контактом: {user_contact}, статус: {REQUEST_STATUS_CREATED}")
+    logger.info(f"✅ Создана заявка №{request_number} с контактом: {user_contact}")
     
     return ConversationHandler.END
 
@@ -508,7 +496,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отмена создания заявки"""
     user_id = update.effective_user.id
     
-    # Очищаем временные данные
     if user_id in temp_request_data:
         del temp_request_data[user_id]
     
@@ -521,9 +508,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_partner_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    ОБРАБОТЧИК ТОЛЬКО ДЛЯ ЧАТА ПАРТНЕРОВ
-    """
+    """Обработчик сообщений в чате партнеров"""
     target_chat_id = int(CHAT_ID)
     
     if update.effective_chat.id != target_chat_id:
@@ -532,7 +517,6 @@ async def handle_partner_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
     logger.info("=" * 60)
     logger.info(f"🔵 СООБЩЕНИЕ В ЧАТЕ ПАРТНЕРОВ от @{update.effective_user.username}")
     
-    # Проверяем, что это ответ на какое-то сообщение
     if update.message and update.message.reply_to_message:
         replied_message = update.message.reply_to_message
         partner = update.effective_user
@@ -541,28 +525,18 @@ async def handle_partner_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         logger.info(f"   Ответ на сообщение ID: {replied_message.message_id}")
         
-        # Ищем заявку по ID сообщения
-        found_request = None
-        found_request_num = None
-        
         for req_num, req_data in user_requests.items():
-            message_id = req_data.get('message_id')
-            if message_id == replied_message.message_id and req_data.get('status') == REQUEST_STATUS_CREATED:
-                found_request = req_data
-                found_request_num = req_num
-                break
+            if req_data.get('message_id') == replied_message.message_id and req_data.get('status') == REQUEST_STATUS_CREATED:
+                await accept_request(update, context, req_data, req_num, partner, partner_username, partner_full_name, target_chat_id)
+                return
         
-        if found_request and found_request_num:
-            await accept_request(update, context, found_request, found_request_num, partner, partner_username, partner_full_name, target_chat_id)
-        else:
-            await update.message.reply_text(
-                "❌ Эта заявка уже неактивна или была взята другим партнером"
-            )
+        await update.message.reply_text(
+            "❌ Эта заявка уже неактивна или была взята другим партнером"
+        )
         
         logger.info("=" * 60)
         return
     
-    # Если это просто текст в чате (не ответ и не команда)
     if update.message and update.message.text and not update.message.text.startswith('/'):
         await update.message.reply_text(
             "ℹ️ Чтобы забрать заявку:\n"
@@ -598,79 +572,164 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(
                 text=query.message.text + "\n\n❌ Заявка уже неактивна"
             )
+    
+    # НОВЫЙ ОБРАБОТЧИК ДЛЯ ОТКАЗА
+    elif data.startswith("cancel_"):
+        request_number = int(data.split("_")[1])
+        partner = query.from_user
+        
+        if request_number in user_requests and user_requests[request_number]['status'] == REQUEST_STATUS_ASSIGNED:
+            if user_requests[request_number].get('taken_by_id') == partner.id:
+                req_data = user_requests[request_number]
+                await cancel_request(query, context, req_data, request_number)
+                await query.edit_message_text(text=query.message.text + "\n\n✅ Вы отказались от заявки")
+            else:
+                await query.edit_message_text(text=query.message.text + "\n\n❌ Это не ваша заявка")
+        else:
+            await query.edit_message_text(text=query.message.text + "\n\n❌ Заявка уже неактивна")
 
 
 async def accept_request(update_or_query, context, req_data, request_number, partner, partner_username, partner_full_name, target_chat_id):
-    """Общая функция для принятия заявки"""
+    """Функция для принятия заявки"""
     
-    # Партнер забирает заявку
     req_data['taken_by'] = partner_full_name
     req_data['taken_by_username'] = partner_username
     req_data['taken_by_id'] = partner.id
-    req_data['status'] = REQUEST_STATUS_ASSIGNED  # Статус "назначен вп"
+    req_data['status'] = REQUEST_STATUS_ASSIGNED
     taken_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     req_data['taken_at'] = taken_at
     
     logger.info(f"✅ Партнер @{partner_username} забирает заявку №{request_number}")
     
-    # 1. Если это нажатие на кнопку - просто убираем кнопку из сообщения
     if hasattr(update_or_query, 'edit_message_text'):
         await update_or_query.edit_message_text(
             text=update_or_query.message.text
         )
     
-    # 2. Отправляем только одно сообщение в общий чат
+    # Сообщение в общий чат
     await context.bot.send_message(
         chat_id=target_chat_id,
         text=f"🔥 Выдающий партнёр @{partner_username} забрал заявку №{request_number}"
     )
     
-    # 3. Отправляем личное сообщение партнеру с информацией по доставке
+    # УВЕДОМЛЕНИЕ ВЫДАЮЩЕМУ ПАРТНЁРУ
     try:
         delivery_info = (
             f"📬 Вы приняли заявку №{request_number}:\n\n"
             f"Инфо по доставке\n"
             f"   • Адрес: {req_data['address']}\n"
             f"   • Контакт клиента: {req_data.get('contact', 'Не указан')}\n\n"
-            f"💬 Напишите партнёру @{req_data['username']} в личные сообщения для получения дополнительной информации"
+            f"💬 Напишите партнёру @{req_data['username']} для получения дополнительной информации\n\n"
+            f"❗ Если не можете выполнить заявку - используйте /my_requests для отказа"
         )
         
         await context.bot.send_message(
             chat_id=partner.id,
-            text=delivery_info
+            text=delivery_info,
+            reply_markup=get_cancel_request_keyboard(request_number)
         )
-        logger.info(f"✅ Личное сообщение с информацией по доставке отправлено партнеру {partner.id}")
+        logger.info(f"✅ Уведомление отправлено выдающему партнёру {partner.id}")
         
     except Exception as e:
-        logger.error(f"❌ Не удалось отправить личное сообщение партнеру {partner.id}: {e}")
+        logger.error(f"❌ Не удалось отправить уведомление выдающему партнёру {partner.id}: {e}")
     
-    # 4. Отправляем уведомление продающему партнёру (НОВОЕ!)
+    # УВЕДОМЛЕНИЕ ПРОДАЮЩЕМУ ПАРТНЁРУ (НОВОЕ)
     try:
         seller_id = req_data.get('user_id')
         if seller_id:
             notification = (
-                f"📢 Уведомление о заявке №{request_number}\n\n"
+                f"📢 Заявка №{request_number}\n\n"
                 f"🔥 Партнёр @{partner_username} взял вашу заявку!\n\n"
                 f"📝 Адрес доставки: {req_data['address']}\n"
                 f"📞 Контакт клиента: {req_data.get('contact', 'Не указан')}\n\n"
-                f"💬 Свяжитесь с партнёром для уточнения деталей: @{partner_username}"
+                f"💬 Статус заявки: {REQUEST_STATUS_ASSIGNED}"
             )
             
             await context.bot.send_message(
                 chat_id=seller_id,
                 text=notification
             )
-            logger.info(f"✅ Уведомление отправлено продающему партнёру @{req_data['username']} о том, что заявку №{request_number} взял @{partner_username}")
+            logger.info(f"✅ Уведомление отправлено продающему партнёру @{req_data['username']}")
     except Exception as e:
-        logger.error(f"❌ Не удалось отправить уведомление продающему партнёру {req_data.get('user_id')}: {e}")
+        logger.error(f"❌ Не удалось отправить уведомление продающему партнёру: {e}")
     
-    # 5. Обновляем статус в Google Sheets на "назначен вп"
     update_request_status(request_number, REQUEST_STATUS_ASSIGNED, partner_username)
     
-    # 6. Отвечаем только если это reply (не кнопка)
     if hasattr(update_or_query, 'message') and not hasattr(update_or_query, 'edit_message_text'):
         await update_or_query.message.reply_text(
-            f"✅ Вы взяли заявку №{request_number}. В личные сообщения придёт информация по доставке"
+            f"✅ Вы взяли заявку №{request_number}. Информация в личке"
+        )
+
+
+# НОВАЯ ФУНКЦИЯ ДЛЯ ОТКАЗА
+async def cancel_request(update_or_query, context, req_data, request_number):
+    """Функция для отказа от заявки"""
+    
+    old_status = req_data['status']
+    req_data['status'] = REQUEST_STATUS_CANCELLED
+    taken_by_username = req_data.get('taken_by_username', 'Неизвестно')
+    
+    logger.info(f"❌ Партнёр @{taken_by_username} отказался от заявки №{request_number}")
+    
+    # Обновляем статус в Google Sheets
+    update_request_status(request_number, REQUEST_STATUS_CANCELLED)
+    
+    # УВЕДОМЛЕНИЕ ПРОДАЮЩЕМУ ПАРТНЁРУ
+    try:
+        seller_id = req_data.get('user_id')
+        if seller_id:
+            notification = (
+                f"⚠️ Заявка №{request_number}\n\n"
+                f"❌ Партнёр @{taken_by_username} отказался от заявки.\n\n"
+                f"📝 Адрес: {req_data['address']}\n"
+                f"📞 Контакт клиента: {req_data.get('contact', 'Не указан')}\n\n"
+                f"💬 Статус заявки: {REQUEST_STATUS_CANCELLED}\n\n"
+                f"❗ Отправьте заявку в СВК или создайте новую"
+            )
+            
+            await context.bot.send_message(
+                chat_id=seller_id,
+                text=notification
+            )
+            logger.info(f"✅ Уведомление об отказе отправлено продающему партнёру @{req_data['username']}")
+    except Exception as e:
+        logger.error(f"❌ Не удалось отправить уведомление об отказе: {e}")
+    
+    # УВЕДОМЛЕНИЕ ПАРТНЁРУ, КОТОРЫЙ ОТКАЗАЛСЯ
+    try:
+        await context.bot.send_message(
+            chat_id=req_data['taken_by_id'],
+            text=f"✅ Вы отказались от заявки №{request_number}. Продающий партнёр уведомлён."
+        )
+    except Exception as e:
+        logger.error(f"❌ Не удалось отправить подтверждение отказа: {e}")
+
+
+async def my_requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """НОВАЯ КОМАНДА: Показать взятые заявки с возможностью отказа"""
+    user_id = update.effective_user.id
+    
+    my_requests = []
+    for req_num, req_data in user_requests.items():
+        if req_data.get('taken_by_id') == user_id and req_data['status'] == REQUEST_STATUS_ASSIGNED:
+            my_requests.append((req_num, req_data))
+    
+    if not my_requests:
+        await update.message.reply_text("📋 У вас нет активных взятых заявок")
+        return
+    
+    for req_num, req_data in my_requests:
+        message = (
+            f"📦 Заявка №{req_num}\n"
+            f"📝 Адрес: {req_data['address']}\n"
+            f"👤 Продающий: @{req_data['username']}\n"
+            f"📞 Контакт: {req_data.get('contact', 'Не указан')}\n"
+            f"⏰ Взята: {req_data.get('taken_at', 'Неизвестно')}"
+        )
+        
+        await update.message.reply_text(
+            message,
+            reply_markup=get_cancel_request_keyboard(req_num)
         )
 
 
@@ -678,9 +737,7 @@ async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /accept - альтернативный способ принять заявку (только в личке)"""
     target_chat_id = int(CHAT_ID)
     
-    # Проверяем, что это личное сообщение, а не чат партнеров
     if update.effective_chat.id == target_chat_id:
-        # В чате партнеров команда /accept не работает
         await update.message.reply_text(
             "❌ В этом чате используйте /take <номер> для принятия заявки"
         )
@@ -712,14 +769,12 @@ async def take_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /take - принять заявку по номеру прямо из чата"""
     target_chat_id = int(CHAT_ID)
     
-    # Проверяем, что команда из чата партнеров
     if update.effective_chat.id != target_chat_id:
         await update.message.reply_text(
             "❌ Команда /take доступна только в чате партнеров"
         )
         return
     
-    # Проверяем наличие номера заявки
     if not context.args or not context.args[0].isdigit():
         await update.message.reply_text(
             "❌ Использование: /take <номер_заявки>\n"
@@ -733,16 +788,11 @@ async def take_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     partner_username = partner.username or f"user_{partner.id}"
     partner_full_name = partner.full_name or partner_username
     
-    # Ищем заявку
     if request_number in user_requests and user_requests[request_number]['status'] == REQUEST_STATUS_CREATED:
         req_data = user_requests[request_number]
-        
-        # Принимаем заявку
         await accept_request(update, context, req_data, request_number, partner, 
                            partner_username, partner_full_name, target_chat_id)
-        
         logger.info(f"✅ Заявка №{request_number} принята через /take партнером @{partner_username}")
-        
     else:
         await update.message.reply_text(
             f"❌ Заявка №{request_number} не найдена или уже взята"
@@ -753,7 +803,6 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /status - показать активные заявки"""
     target_chat_id = int(CHAT_ID)
     
-    # Команда доступна везде, но в чате партнеров показывает активные заявки
     active_requests = [f"№{num} - {data['address']} - @{data['username']} - Контакт: {data.get('contact', 'Не указан')} - Статус: {data['status']}" 
                        for num, data in user_requests.items() 
                        if data['status'] == REQUEST_STATUS_CREATED]
@@ -770,13 +819,9 @@ def create_application():
     """Создает и настраивает Application с обработчиками"""
     global application
     
-    # Создаем приложение
     application = Application.builder().token(TOKEN).build()
-    
-    # Преобразуем CHAT_ID в int с минусом
     partner_chat_id = int(CHAT_ID)
     
-    # Создаем ConversationHandler для процесса создания заявки
     request_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Text("📝 Оставить заявку"), start_request)],
         states={
@@ -786,32 +831,19 @@ def create_application():
         fallbacks=[MessageHandler(filters.Text("❌ Отменить"), cancel)],
     )
     
-    # 1. Команды
+    # Команды
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("accept", accept_command))
     application.add_handler(CommandHandler("take", take_command))
     application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("my_requests", my_requests_command))  # НОВАЯ КОМАНДА
     
-    # 2. Обработчик инструкции
+    # Обработчики
     application.add_handler(MessageHandler(filters.Text("📋 Инструкция"), instruction))
-    
-    # 3. ConversationHandler для создания заявки
     application.add_handler(request_conv_handler)
-    
-    # 4. Обработчик нажатий на inline-кнопки
     application.add_handler(CallbackQueryHandler(handle_callback))
-    
-    # 5. Сообщения из чата партнеров
-    application.add_handler(MessageHandler(
-        filters.Chat(chat_id=partner_chat_id),
-        handle_partner_chat
-    ))
-    
-    # 6. Обработчик отмены (на случай если пользователь напишет "Отменить" вне диалога)
-    application.add_handler(MessageHandler(
-        filters.Text("❌ Отменить") & filters.ChatType.PRIVATE,
-        cancel
-    ))
+    application.add_handler(MessageHandler(filters.Chat(chat_id=partner_chat_id), handle_partner_chat))
+    application.add_handler(MessageHandler(filters.Text("❌ Отменить") & filters.ChatType.PRIVATE, cancel))
     
     return application
 
@@ -824,7 +856,6 @@ def main():
     print(f"📦 telegram версия: {telegram.__version__}")
     print(f"📢 Чат партнеров ID: {CHAT_ID}")
     
-    # Инициализируем Google Sheets
     if not init_google_sheets():
         logger.error("Не удалось загрузить данные из Google Sheets")
         print("❌ Ошибка загрузки городов из Google Sheets")
@@ -836,7 +867,6 @@ def main():
         return
     
     try:
-        # Создаем и настраиваем приложение
         app = create_application()
         
         logger.info("✅ Бот инициализирован")
@@ -845,10 +875,9 @@ def main():
         print(f"   • Чат партнеров (ID: {int(CHAT_ID)}) → /status, /take и ответы на заявки")
         print("   • Личные сообщения → все функции")
         print("   • Inline-кнопки → handle_callback")
-        print("   • Данные сохраняются в лист 'Отчётность' с контактом клиента и статусом")
-        print("   • Продающие партнёры получают уведомления о взятии заявок")
+        print("   • Данные сохраняются в лист 'Отчётность'")
+        print("   • Продающие партнёры получают уведомления о взятии и отказе")
         
-        # Запускаем бота
         app.run_polling(allowed_updates=Update.ALL_TYPES)
         
     except Exception as e:
@@ -858,15 +887,11 @@ def main():
 
 
 # ========== ДЛЯ RAILWAY ==========
-# Этот код выполняется при импорте модуля для вебхуков
 if __name__ != '__main__':
     print("🔄 Загрузка бота для Railway (вебхуки)...")
-    # Инициализируем Google Sheets
     init_google_sheets()
-    # Создаем и настраиваем application
     application = create_application()
     print(f"✅ Бот загружен для Railway, application создан")
-
 
 if __name__ == '__main__':
     try:
