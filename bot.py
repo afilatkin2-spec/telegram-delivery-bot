@@ -18,7 +18,7 @@ try:
     print(f"✅ python-telegram-bot версия: {telegram.__version__}")
 except ImportError as e:
     print(f"❌ Ошибка импорта telegram: {e}")
-    print("Установите: pip install python-telegram-bot==20.7")
+    print("Установите: pip install python-telegram-bot[job-queue]==20.7")
     sys.exit(1)
 
 import gspread
@@ -41,7 +41,7 @@ ADDRESS, CONTACT = range(2)
 REQUEST_STATUS_CREATED = "создана"
 REQUEST_STATUS_ASSIGNED = "назначен ВП"
 REQUEST_STATUS_CANCELLED = "отказ ВП"
-REQUEST_STATUS_EXPIRED = "просрочена"  # НОВЫЙ СТАТУС
+REQUEST_STATUS_EXPIRED = "просрочена"
 
 # Настройка логирования
 logging.basicConfig(
@@ -248,25 +248,39 @@ def update_request_status(request_number: int, status: str, taken_by_username: s
         return False
 
 
-# ========== НОВАЯ ФУНКЦИЯ ДЛЯ ПРОВЕРКИ ПРОСРОЧЕННЫХ ЗАЯВОК ==========
+# ========== ФУНКЦИЯ ДЛЯ ПРОВЕРКИ ПРОСРОЧЕННЫХ ЗАЯВОК ==========
 async def check_expired_requests(context: ContextTypes.DEFAULT_TYPE):
     """Проверяет просроченные заявки и отправляет уведомления"""
-    logger.info("🔍 Проверка просроченных заявок...")
-    now = datetime.now()
+    import sys
     
+    # Принудительный вывод для диагностики
+    current_time = datetime.now().strftime("%H:%M:%S")
+    print(f"🔍 ПРОВЕРКА ПРОСРОЧКИ в {current_time}", file=sys.stdout)
+    sys.stdout.flush()
+    
+    logger.info("🔍 Проверка просроченных заявок...")
+    
+    # Считаем активные заявки
+    created_count = sum(1 for r in user_requests.values() if r['status'] == REQUEST_STATUS_CREATED)
+    logger.info(f"📊 Активных заявок со статусом 'создана': {created_count}")
+    
+    now = datetime.now()
     expired_requests = []
     
-    # Ищем заявки со статусом "создана" старше 30 секунд
     for req_num, req_data in list(user_requests.items()):
         if req_data['status'] == REQUEST_STATUS_CREATED:
             created_at = datetime.strptime(req_data['created_at'], "%Y-%m-%d %H:%M:%S")
             age = now - created_at
+            age_seconds = age.total_seconds()
             
-            if age > timedelta(seconds=REQUEST_TIMEOUT_SECONDS):
+            logger.info(f"📊 Заявка №{req_num}: возраст {age_seconds:.1f} сек, создана {created_at.strftime('%H:%M:%S')}")
+            
+            if age_seconds > REQUEST_TIMEOUT_SECONDS:
+                logger.info(f"⏰ Заявка №{req_num} просрочена ({age_seconds:.1f} сек)")
                 expired_requests.append((req_num, req_data))
     
     for req_num, req_data in expired_requests:
-        logger.info(f"⏰ Заявка №{req_num} просрочена")
+        logger.info(f"⏰ Обрабатываем просроченную заявку №{req_num}")
         
         # Обновляем статус
         req_data['status'] = REQUEST_STATUS_EXPIRED
@@ -304,7 +318,7 @@ async def check_expired_requests(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"❌ Ошибка уведомления в чат: {e}")
         
-        # Удаляем кнопку из сообщения в чате (опционально)
+        # Удаляем кнопку из сообщения в чате
         try:
             if req_data.get('message_id'):
                 await context.bot.edit_message_text(
@@ -312,11 +326,14 @@ async def check_expired_requests(context: ContextTypes.DEFAULT_TYPE):
                     message_id=req_data['message_id'],
                     text=f"📦 Заявка №{req_num}\n📝 Адрес: {req_data['address']}\n👤 От: @{req_data['username']}\n\n❌ ЗАЯВКА ПРОСРОЧЕНА"
                 )
+                logger.info(f"✅ Кнопка удалена из сообщения")
         except Exception as e:
             logger.error(f"❌ Ошибка удаления кнопки: {e}")
     
     if expired_requests:
         logger.info(f"✅ Обработано {len(expired_requests)} просроченных заявок")
+    else:
+        logger.info("✅ Просроченных заявок не найдено")
 
 
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
@@ -921,10 +938,15 @@ def create_application():
     application.add_handler(MessageHandler(filters.Text("❌ Отменить") & filters.ChatType.PRIVATE, cancel))
     
     # Добавляем периодическую задачу для проверки просроченных заявок
-    job_queue = application.job_queue
-    if job_queue:
-        job_queue.run_repeating(check_expired_requests, interval=10, first=5)
+    if application.job_queue:
+        application.job_queue.run_repeating(
+            check_expired_requests, 
+            interval=10,  # Проверяем каждые 10 секунд
+            first=5       # Первая проверка через 5 секунд после запуска
+        )
         logger.info("✅ Запущена проверка просроченных заявок каждые 10 секунд")
+    else:
+        logger.error("❌ JobQueue не доступен! Убедитесь, что установлен python-telegram-bot[job-queue]==20.7")
     
     return application
 
