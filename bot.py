@@ -5,7 +5,7 @@ import os
 import json
 from difflib import SequenceMatcher
 from typing import Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # Проверка версии Python
 if sys.version_info >= (3, 12):
@@ -18,7 +18,7 @@ try:
     print(f"✅ python-telegram-bot версия: {telegram.__version__}")
 except ImportError as e:
     print(f"❌ Ошибка импорта telegram: {e}")
-    print("Установите: pip install python-telegram-bot[job-queue]==20.7")
+    print("Установите: pip install python-telegram-bot==20.7")
     sys.exit(1)
 
 import gspread
@@ -31,17 +31,13 @@ SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1-0CLwe15mNEHf81-bUVhV
 SHEET_NAME = "Города"
 REPORT_SHEET_NAME = "Отчётность"
 
-# ВРЕМЯ ПРОСРОЧКИ (30 секунд для теста)
-REQUEST_TIMEOUT_SECONDS = 30
-
 # Состояния для ConversationHandler
 ADDRESS, CONTACT = range(2)
 
 # Статусы заявок
 REQUEST_STATUS_CREATED = "создана"
 REQUEST_STATUS_ASSIGNED = "назначен ВП"
-REQUEST_STATUS_CANCELLED = "отказ ВП"
-REQUEST_STATUS_EXPIRED = "просрочена"
+REQUEST_STATUS_CANCELLED = "отказ ВП"  # НОВЫЙ СТАТУС
 
 # Настройка логирования
 logging.basicConfig(
@@ -248,94 +244,6 @@ def update_request_status(request_number: int, status: str, taken_by_username: s
         return False
 
 
-# ========== ФУНКЦИЯ ДЛЯ ПРОВЕРКИ ПРОСРОЧЕННЫХ ЗАЯВОК ==========
-async def check_expired_requests(context: ContextTypes.DEFAULT_TYPE):
-    """Проверяет просроченные заявки и отправляет уведомления"""
-    import sys
-    
-    # Принудительный вывод для диагностики
-    current_time = datetime.now().strftime("%H:%M:%S")
-    print(f"🔍 ПРОВЕРКА ПРОСРОЧКИ в {current_time}", file=sys.stdout)
-    sys.stdout.flush()
-    
-    logger.info("🔍 Проверка просроченных заявок...")
-    
-    # Считаем активные заявки
-    created_count = sum(1 for r in user_requests.values() if r['status'] == REQUEST_STATUS_CREATED)
-    logger.info(f"📊 Активных заявок со статусом 'создана': {created_count}")
-    
-    now = datetime.now()
-    expired_requests = []
-    
-    for req_num, req_data in list(user_requests.items()):
-        if req_data['status'] == REQUEST_STATUS_CREATED:
-            created_at = datetime.strptime(req_data['created_at'], "%Y-%m-%d %H:%M:%S")
-            age = now - created_at
-            age_seconds = age.total_seconds()
-            
-            logger.info(f"📊 Заявка №{req_num}: возраст {age_seconds:.1f} сек, создана {created_at.strftime('%H:%M:%S')}")
-            
-            if age_seconds > REQUEST_TIMEOUT_SECONDS:
-                logger.info(f"⏰ Заявка №{req_num} просрочена ({age_seconds:.1f} сек)")
-                expired_requests.append((req_num, req_data))
-    
-    for req_num, req_data in expired_requests:
-        logger.info(f"⏰ Обрабатываем просроченную заявку №{req_num}")
-        
-        # Обновляем статус
-        req_data['status'] = REQUEST_STATUS_EXPIRED
-        update_request_status(req_num, REQUEST_STATUS_EXPIRED)
-        
-        # УВЕДОМЛЕНИЕ ПРОДАЮЩЕМУ ПАРТНЁРУ
-        try:
-            if req_data.get('user_id'):
-                await context.bot.send_message(
-                    chat_id=req_data['user_id'],
-                    text=(
-                        f"⏰ Заявка №{req_num} просрочена\n\n"
-                        f"Никто не взял заявку в течение {REQUEST_TIMEOUT_SECONDS} секунд.\n"
-                        f"📝 Адрес: {req_data['address']}\n"
-                        f"📞 Контакт: {req_data.get('contact', 'Не указан')}\n\n"
-                        f"❌ Отправьте заявку в СВК"
-                    )
-                )
-                logger.info(f"✅ Уведомление о просрочке отправлено @{req_data['username']}")
-        except Exception as e:
-            logger.error(f"❌ Ошибка уведомления о просрочке: {e}")
-        
-        # УВЕДОМЛЕНИЕ В ЧАТ ПАРТНЁРОВ
-        try:
-            await context.bot.send_message(
-                chat_id=int(CHAT_ID),
-                text=(
-                    f"⏰ Заявка №{req_num} закрыта\n"
-                    f"📝 Адрес: {req_data['address']}\n"
-                    f"👤 От: @{req_data['username']}\n"
-                    f"❌ Причина: никто не взял в течение {REQUEST_TIMEOUT_SECONDS} секунд"
-                )
-            )
-            logger.info(f"✅ Уведомление о закрытии отправлено в чат")
-        except Exception as e:
-            logger.error(f"❌ Ошибка уведомления в чат: {e}")
-        
-        # Удаляем кнопку из сообщения в чате
-        try:
-            if req_data.get('message_id'):
-                await context.bot.edit_message_text(
-                    chat_id=int(CHAT_ID),
-                    message_id=req_data['message_id'],
-                    text=f"📦 Заявка №{req_num}\n📝 Адрес: {req_data['address']}\n👤 От: @{req_data['username']}\n\n❌ ЗАЯВКА ПРОСРОЧЕНА"
-                )
-                logger.info(f"✅ Кнопка удалена из сообщения")
-        except Exception as e:
-            logger.error(f"❌ Ошибка удаления кнопки: {e}")
-    
-    if expired_requests:
-        logger.info(f"✅ Обработано {len(expired_requests)} просроченных заявок")
-    else:
-        logger.info("✅ Просроченных заявок не найдено")
-
-
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 def normalize_text(text: str) -> str:
     """Нормализация текста для сравнения"""
@@ -405,6 +313,7 @@ def get_partner_chat_keyboard(request_number: int):
     ]
     return InlineKeyboardMarkup(keyboard)
 
+# НОВАЯ КНОПКА ДЛЯ ОТКАЗА
 def get_cancel_request_keyboard(request_number: int):
     keyboard = [
         [InlineKeyboardButton("❌ Отказаться от заявки", callback_data=f"cancel_{request_number}")]
@@ -424,7 +333,6 @@ SIMPLE_INSTRUCTION = """
 • Ожидайте, когда выдающий партнёр её заберёт
 • Вы получите уведомление, когда вашу заявку примут
 • Если партнёр откажется - вы тоже получите уведомление
-• Если за 30 секунд никто не взял - заявка закроется автоматически
 
 ⚡️ *Для выдающих партнёров:*
 • Кнопка «✅ Забрать заявку» появится в вашем региональном чате
@@ -432,7 +340,6 @@ SIMPLE_INSTRUCTION = """
 • В личные сообщения придёт информация по доставке
 • Продающий партнёр получит уведомление о том, что вы взяли заявку
 • Если не можете выполнить - используйте /my_requests для отказа
-• Не взятые заявки автоматически закрываются через 30 секунд
 
 ✅ *Всё просто!* Нажмите «📝 Оставить заявку» для создания заявки
 """
@@ -573,7 +480,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"✅ Заявка №{request_number} отправлена, с вами свяжется партнёр.\n"
         f"Контакт клиента сохранён: {user_contact}\n\n"
-        f"Если никто не свяжется в течение 30 секунд, заявка закроется автоматически",
+        f"Если никто не свяжется в течение 10 минут, отправьте клиенту анкету на доставку через СВК",
         reply_markup=get_main_keyboard()
     )
     
@@ -636,8 +543,7 @@ async def handle_partner_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
             "• Нажмите кнопку «✅ Забрать заявку» под сообщением\n"
             "• Или ответьте на сообщение с заявкой\n"
             "• Или используйте команду /take <номер>\n\n"
-            "📋 Для просмотра активных заявок используйте /status\n\n"
-            "⏰ Не взятые заявки автоматически закрываются через 30 секунд"
+            "📋 Для просмотра активных заявок используйте /status"
         )
         logger.info("=" * 60)
         return
@@ -667,6 +573,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=query.message.text + "\n\n❌ Заявка уже неактивна"
             )
     
+    # НОВЫЙ ОБРАБОТЧИК ДЛЯ ОТКАЗА
     elif data.startswith("cancel_"):
         request_number = int(data.split("_")[1])
         partner = query.from_user
@@ -705,7 +612,7 @@ async def accept_request(update_or_query, context, req_data, request_number, par
         text=f"🔥 Выдающий партнёр @{partner_username} забрал заявку №{request_number}"
     )
     
-    # Уведомление выдающему партнёру
+    # УВЕДОМЛЕНИЕ ВЫДАЮЩЕМУ ПАРТНЁРУ
     try:
         delivery_info = (
             f"📬 Вы приняли заявку №{request_number}:\n\n"
@@ -726,7 +633,7 @@ async def accept_request(update_or_query, context, req_data, request_number, par
     except Exception as e:
         logger.error(f"❌ Не удалось отправить уведомление выдающему партнёру {partner.id}: {e}")
     
-    # Уведомление продающему партнёру
+    # УВЕДОМЛЕНИЕ ПРОДАЮЩЕМУ ПАРТНЁРУ (НОВОЕ)
     try:
         seller_id = req_data.get('user_id')
         if seller_id:
@@ -754,6 +661,7 @@ async def accept_request(update_or_query, context, req_data, request_number, par
         )
 
 
+# НОВАЯ ФУНКЦИЯ ДЛЯ ОТКАЗА
 async def cancel_request(update_or_query, context, req_data, request_number):
     """Функция для отказа от заявки"""
     
@@ -766,7 +674,7 @@ async def cancel_request(update_or_query, context, req_data, request_number):
     # Обновляем статус в Google Sheets
     update_request_status(request_number, REQUEST_STATUS_CANCELLED)
     
-    # Уведомление продающему партнёру
+    # УВЕДОМЛЕНИЕ ПРОДАЮЩЕМУ ПАРТНЁРУ
     try:
         seller_id = req_data.get('user_id')
         if seller_id:
@@ -787,7 +695,7 @@ async def cancel_request(update_or_query, context, req_data, request_number):
     except Exception as e:
         logger.error(f"❌ Не удалось отправить уведомление об отказе: {e}")
     
-    # Уведомление партнёру, который отказался
+    # УВЕДОМЛЕНИЕ ПАРТНЁРУ, КОТОРЫЙ ОТКАЗАЛСЯ
     try:
         await context.bot.send_message(
             chat_id=req_data['taken_by_id'],
@@ -798,7 +706,7 @@ async def cancel_request(update_or_query, context, req_data, request_number):
 
 
 async def my_requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда для просмотра взятых заявок с возможностью отказа"""
+    """НОВАЯ КОМАНДА: Показать взятые заявки с возможностью отказа"""
     user_id = update.effective_user.id
     
     my_requests = []
@@ -928,7 +836,7 @@ def create_application():
     application.add_handler(CommandHandler("accept", accept_command))
     application.add_handler(CommandHandler("take", take_command))
     application.add_handler(CommandHandler("status", status_command))
-    application.add_handler(CommandHandler("my_requests", my_requests_command))
+    application.add_handler(CommandHandler("my_requests", my_requests_command))  # НОВАЯ КОМАНДА
     
     # Обработчики
     application.add_handler(MessageHandler(filters.Text("📋 Инструкция"), instruction))
@@ -936,17 +844,6 @@ def create_application():
     application.add_handler(CallbackQueryHandler(handle_callback))
     application.add_handler(MessageHandler(filters.Chat(chat_id=partner_chat_id), handle_partner_chat))
     application.add_handler(MessageHandler(filters.Text("❌ Отменить") & filters.ChatType.PRIVATE, cancel))
-    
-    # Добавляем периодическую задачу для проверки просроченных заявок
-    if application.job_queue:
-        application.job_queue.run_repeating(
-            check_expired_requests, 
-            interval=10,  # Проверяем каждые 10 секунд
-            first=5       # Первая проверка через 5 секунд после запуска
-        )
-        logger.info("✅ Запущена проверка просроченных заявок каждые 10 секунд")
-    else:
-        logger.error("❌ JobQueue не доступен! Убедитесь, что установлен python-telegram-bot[job-queue]==20.7")
     
     return application
 
@@ -980,7 +877,6 @@ def main():
         print("   • Inline-кнопки → handle_callback")
         print("   • Данные сохраняются в лист 'Отчётность'")
         print("   • Продающие партнёры получают уведомления о взятии и отказе")
-        print("   • ⏰ Автозакрытие просроченных заявок через 30 секунд")
         
         app.run_polling(allowed_updates=Update.ALL_TYPES)
         
