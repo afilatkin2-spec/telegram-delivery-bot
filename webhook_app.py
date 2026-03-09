@@ -4,6 +4,8 @@ import logging
 import os
 import sys
 import asyncio
+import threading
+import time
 from functools import wraps
 
 # Настройка логирования
@@ -18,6 +20,9 @@ app = Flask(__name__)
 
 # Глобальный event loop
 loop = None
+application = None
+Update = None
+TOKEN = None
 
 def init_loop():
     """Инициализирует глобальный event loop"""
@@ -45,8 +50,6 @@ try:
     logger.info("✅ Бот импортирован")
 except Exception as e:
     logger.error(f"❌ Ошибка при импорте: {e}")
-    application = None
-    Update = None
 
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "pavdanf")
 logger.info(f"🔑 Секрет: {WEBHOOK_SECRET}")
@@ -123,6 +126,16 @@ def debug():
         "bot_imported": application is not None,
         "status": "running"
     })
+
+# Фоновый поток для поддержания жизни
+def keep_alive():
+    """Держит приложение живым"""
+    while True:
+        time.sleep(30)
+        logger.info("💓 Heartbeat - приложение живо")
+
+# Запускаем фоновый поток
+threading.Thread(target=keep_alive, daemon=True).start()
 
 if __name__ == '__main__':
     port = int(os.getenv("PORT", 8080))
