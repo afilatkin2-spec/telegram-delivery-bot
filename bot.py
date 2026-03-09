@@ -547,11 +547,11 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     
     save_request_to_sheet(request_number, user_requests[request_number])
-    
+
     chat_message = (
-        f"📦 В вашем регионе есть новая заявка на доставку №{request_number}\n"
-        f"📝 Адрес: {user_address}\n"
-        f"👤 От партнёра: @{username}"
+    f"📦 В вашем регионе есть новая заявка на доставку №{request_number}\n"
+    f"📝 Адрес: {user_address}\n"
+    f"⏰ У вас есть {REQUEST_TIMEOUT_SECONDS} секунд, чтобы забрать её"
     )
     
     sent_message = await context.bot.send_message(
