@@ -405,7 +405,7 @@ def get_cancel_request_keyboard(request_number: int):
     return InlineKeyboardMarkup(keyboard)
 
 
-# ========== ИНСТРУКЦИЯ (БЕЗ MARKDOWN) ==========
+# ========== ИНСТРУКЦИЯ ==========
 SIMPLE_INSTRUCTION = """
 📋 ИНСТРУКЦИЯ
 
@@ -470,18 +470,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def instruction(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает инструкцию (без Markdown)"""
+    """Показывает инструкцию"""
     user_id = update.effective_user.id
     username = update.effective_user.username or "без username"
     
-    # Диагностика
     print(f"📋 ИНСТРУКЦИЯ ВЫЗВАНА для @{username} (ID: {user_id})", flush=True)
     logger.info(f"📋 ИНСТРУКЦИЯ вызвана для пользователя {user_id}")
     
     try:
         await update.message.reply_text(
             SIMPLE_INSTRUCTION,
-            # parse_mode='Markdown' - УБРАНО! Это вызывало ошибку
             reply_markup=get_main_keyboard()
         )
         user_states[user_id] = True
@@ -804,6 +802,9 @@ async def cancel_request(update_or_query, context, req_data, request_number):
 async def my_requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда для просмотра взятых заявок с возможностью отказа"""
     user_id = update.effective_user.id
+    username = update.effective_user.username or "без username"
+    
+    logger.info(f"📋 /my_requests вызвана пользователем @{username} (ID: {user_id})")
     
     my_requests = []
     for req_num, req_data in user_requests.items():
@@ -812,21 +813,33 @@ async def my_requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     if not my_requests:
         await update.message.reply_text("📋 У вас нет активных взятых заявок")
+        logger.info(f"✅ У пользователя @{username} нет активных заявок")
         return
     
+    await update.message.reply_text(f"📋 Найдено {len(my_requests)} активных заявок:")
+    
     for req_num, req_data in my_requests:
+        # Рассчитываем время, прошедшее с момента взятия
+        taken_at = datetime.strptime(req_data.get('taken_at', req_data['created_at']), "%Y-%m-%d %H:%M:%S")
+        time_passed = datetime.now() - taken_at
+        minutes = int(time_passed.total_seconds() // 60)
+        seconds = int(time_passed.total_seconds() % 60)
+        
         message = (
             f"📦 Заявка №{req_num}\n"
             f"📝 Адрес: {req_data['address']}\n"
             f"👤 Продающий: @{req_data['username']}\n"
             f"📞 Контакт: {req_data.get('contact', 'Не указан')}\n"
-            f"⏰ Взята: {req_data.get('taken_at', 'Неизвестно')}"
+            f"⏰ Взята: {req_data.get('taken_at', 'Неизвестно')}\n"
+            f"⌛ В работе: {minutes} мин {seconds} сек"
         )
         
         await update.message.reply_text(
             message,
             reply_markup=get_cancel_request_keyboard(req_num)
         )
+    
+    logger.info(f"✅ Показано {len(my_requests)} заявок пользователю @{username}")
 
 
 async def accept_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -932,7 +945,7 @@ def create_application():
     application.add_handler(CommandHandler("accept", accept_command))
     application.add_handler(CommandHandler("take", take_command))
     application.add_handler(CommandHandler("status", status_command))
-    application.add_handler(CommandHandler("my_requests", my_requests_command))
+    application.add_handler(CommandHandler("my_requests", my_requests_command))  # Команда для просмотра взятых заявок
     
     # Обработчики
     application.add_handler(MessageHandler(filters.Text("📋 Инструкция"), instruction))
@@ -976,6 +989,22 @@ def main():
     try:
         app = create_application()
         
+        # Устанавливаем команды для меню
+        async def set_commands():
+            await app.bot.set_my_commands([
+                ('start', '🚀 Запустить бота'),
+                ('status', '📊 Активные заявки'),
+                ('my_requests', '📋 Мои заявки'),
+            ])
+            logger.info("✅ Команды для меню установлены")
+        
+        # Запускаем установку команд
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(set_commands())
+        loop.close()
+        
         logger.info("✅ Бот инициализирован")
         print("🚀 Бот запущен! Нажмите Ctrl+C для остановки")
         print("📊 Маршрутизация:")
@@ -985,6 +1014,7 @@ def main():
         print("   • Данные сохраняются в лист 'Отчётность'")
         print("   • Продающие партнёры получают уведомления о взятии и отказе")
         print(f"   • ⏰ Автозакрытие просроченных заявок через {REQUEST_TIMEOUT_SECONDS} секунд")
+        print("   • 📋 Новая команда: /my_requests - мои взятые заявки")
         
         app.run_polling(allowed_updates=Update.ALL_TYPES)
         
@@ -996,10 +1026,10 @@ def main():
 
 # ========== ДЛЯ RAILWAY ==========
 if __name__ != '__main__':
-    print("🔄 Загрузка бота для Railway (вебхуки)...")
+    print("🔄 Загрузка бота для Railway...")
     init_google_sheets()
     application = create_application()
-    print(f"✅ Бот загружен для Railway, application создан")
+    print("✅ Бот загружен для Railway")
 
 if __name__ == '__main__':
     try:
