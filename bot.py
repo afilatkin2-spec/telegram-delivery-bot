@@ -969,6 +969,7 @@ def create_application():
 
 
 # ========== ОСНОВНАЯ ФУНКЦИЯ ==========
+# ========== ОСНОВНАЯ ФУНКЦИЯ ==========
 def main():
     """Запуск бота"""
     print("🔍 Запуск бота...")
@@ -989,21 +990,23 @@ def main():
     try:
         app = create_application()
         
-        # Устанавливаем команды для меню
-        async def set_commands():
-            await app.bot.set_my_commands([
+        # Устанавливаем команды для меню (без создания нового loop)
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
+            loop.run_until_complete(app.bot.set_my_commands([
                 ('start', '🚀 Запустить бота'),
                 ('status', '📊 Активные заявки'),
                 ('my_requests', '📋 Мои заявки'),
-            ])
+            ]))
             logger.info("✅ Команды для меню установлены")
-        
-        # Запускаем установку команд
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(set_commands())
-        loop.close()
+            # НЕ ЗАКРЫВАЕМ LOOP! Он нужен для работы бота
+        except Exception as e:
+            logger.error(f"❌ Ошибка при установке команд: {e}")
         
         logger.info("✅ Бот инициализирован")
         print("🚀 Бот запущен! Нажмите Ctrl+C для остановки")
