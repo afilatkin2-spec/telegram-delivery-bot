@@ -41,7 +41,7 @@ ADDRESS, CONTACT = range(2)
 REQUEST_STATUS_CREATED = "создана"
 REQUEST_STATUS_ASSIGNED = "назначен ВП"
 REQUEST_STATUS_CANCELLED = "отказ ВП"
-REQUEST_STATUS_EXPIRED = "просрочена"  # НОВЫЙ СТАТУС
+REQUEST_STATUS_EXPIRED = "просрочена"
 
 # Настройка логирования
 logging.basicConfig(
@@ -248,7 +248,7 @@ def update_request_status(request_number: int, status: str, taken_by_username: s
         return False
 
 
-# ========== НОВАЯ ФУНКЦИЯ ДЛЯ ПРОВЕРКИ ПРОСРОЧЕННЫХ ЗАЯВОК ==========
+# ========== ФУНКЦИЯ ДЛЯ ПРОВЕРКИ ПРОСРОЧЕННЫХ ЗАЯВОК ==========
 async def check_expired_requests(context: ContextTypes.DEFAULT_TYPE):
     """Проверяет просроченные заявки и отправляет уведомления"""
     import sys
@@ -405,11 +405,11 @@ def get_cancel_request_keyboard(request_number: int):
     return InlineKeyboardMarkup(keyboard)
 
 
-# ========== ИНСТРУКЦИЯ ==========
+# ========== ИНСТРУКЦИЯ (БЕЗ MARKDOWN) ==========
 SIMPLE_INSTRUCTION = """
-📋 *ИНСТРУКЦИЯ*
+📋 ИНСТРУКЦИЯ
 
-👤 *Для продающих партнёров:*
+👤 Для продающих партнёров:
 • Чтобы оставить заявку, нажмите кнопку «📝 Оставить заявку»
 • Введите адрес клиента
 • Укажите способ связи с клиентом
@@ -419,7 +419,7 @@ SIMPLE_INSTRUCTION = """
 • Если партнёр откажется - вы тоже получите уведомление
 • Если за 30 секунд никто не взял - заявка закроется автоматически
 
-⚡️ *Для выдающих партнёров:*
+⚡️ Для выдающих партнёров:
 • Кнопка «✅ Забрать заявку» появится в вашем региональном чате
 • Нажмите её, чтобы принять заявку
 • В личные сообщения придёт информация по доставке
@@ -427,7 +427,7 @@ SIMPLE_INSTRUCTION = """
 • Если не можете выполнить - используйте /my_requests для отказа
 • Не взятые заявки автоматически закрываются через 30 секунд
 
-✅ *Всё просто!* Нажмите «📝 Оставить заявку» для создания заявки
+✅ Всё просто! Нажмите «📝 Оставить заявку» для создания заявки
 """
 
 
@@ -470,15 +470,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def instruction(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает инструкцию"""
+    """Показывает инструкцию (без Markdown)"""
     user_id = update.effective_user.id
+    username = update.effective_user.username or "без username"
     
-    await update.message.reply_text(
-        SIMPLE_INSTRUCTION,
-        parse_mode='Markdown',
-        reply_markup=get_main_keyboard()
-    )
-    user_states[user_id] = True
+    # Диагностика
+    print(f"📋 ИНСТРУКЦИЯ ВЫЗВАНА для @{username} (ID: {user_id})", flush=True)
+    logger.info(f"📋 ИНСТРУКЦИЯ вызвана для пользователя {user_id}")
+    
+    try:
+        await update.message.reply_text(
+            SIMPLE_INSTRUCTION,
+            # parse_mode='Markdown' - УБРАНО! Это вызывало ошибку
+            reply_markup=get_main_keyboard()
+        )
+        user_states[user_id] = True
+        logger.info(f"✅ Инструкция показана пользователю {user_id}")
+        print(f"✅ Инструкция отправлена @{username}", flush=True)
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка в instruction: {e}")
+        print(f"❌ Ошибка: {e}", flush=True)
     
     return ConversationHandler.END
 
@@ -549,9 +561,9 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_request_to_sheet(request_number, user_requests[request_number])
 
     chat_message = (
-    f"📦 В вашем регионе есть новая заявка на доставку №{request_number}\n"
-    f"📝 Адрес: {user_address}\n"
-    f"⏰ У вас есть {REQUEST_TIMEOUT_SECONDS} секунд, чтобы забрать её"
+        f"📦 В вашем регионе есть новая заявка на доставку №{request_number}\n"
+        f"📝 Адрес: {user_address}\n"
+        f"⏰ У вас есть {REQUEST_TIMEOUT_SECONDS} секунд, чтобы забрать её"
     )
     
     sent_message = await context.bot.send_message(
