@@ -26,7 +26,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 # ========== НАСТРОЙКИ ==========
 TOKEN = "8221169246:AAFtryjOLkI2_ADQvZK5rvXLcJrgsJYnmX8"
-CHAT_ID = "-4615357290"
+CHAT_ID = "-1003745784469"
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1-0CLwe15mNEHf81-bUVhVG0IJIIMF6PtvKfSDSh10xs/edit"
 SHEET_NAME = "Города"
 REPORT_SHEET_NAME = "Отчётность"
