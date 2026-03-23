@@ -184,13 +184,11 @@ def save_request_to_sheet(request_number: int, request_data: Dict):
         return False
     
     try:
-        # Проверяем, что первая строка — заголовки (на всякий случай)
-        first_row = report_sheet.row_values(1)
-        if not first_row or first_row[0] != "Номер заявки":
-            logger.warning("Заголовки отсутствуют, добавляем...")
-            headers = ["Номер заявки", "Ник отправителя", "Время создания", "Адрес доставки", "Контакт клиента", "Ник кто забрал", "Время взятия", "Статус"]
-            report_sheet.insert_row(headers, 1)
+        # Получаем последнюю заполненную строку
+        all_rows = report_sheet.get_all_values()
+        next_row = len(all_rows) + 1
         
+        # Подготавливаем данные
         row_data = [
             request_number,
             request_data.get('username', ''),
@@ -202,16 +200,17 @@ def save_request_to_sheet(request_number: int, request_data: Dict):
             REQUEST_STATUS_CREATED
         ]
         
-        logger.info(f"Сохраняем новую заявку №{request_number} в Google Sheets: {row_data}")
+        logger.info(f"Сохраняем заявку №{request_number} в строку {next_row}: {row_data}")
         
-        # Добавляем строку в конец
-        report_sheet.append_row(row_data, value_input_option='USER_ENTERED')
-        logger.info(f"✅ Заявка №{request_number} добавлена")
+        # Записываем в конкретную строку
+        report_sheet.update(f'A{next_row}:H{next_row}', [row_data], value_input_option='USER_ENTERED')
+        logger.info(f"✅ Заявка №{request_number} сохранена в строку {next_row}")
         return True
         
     except Exception as e:
         logger.error(f"❌ Ошибка при сохранении заявки №{request_number}: {e}")
         return False
+        
         
 def update_request_status(request_number: int, status: str, taken_by_username: str = None):
     """Обновляет статус заявки в Google Sheets"""
@@ -226,34 +225,22 @@ def update_request_status(request_number: int, status: str, taken_by_username: s
         
         # Ищем строку с нужным номером заявки
         row_number = None
-        target_created_at = None
-        
-        # Находим время создания заявки в памяти
-        if request_number in user_requests:
-            target_created_at = user_requests[request_number].get('created_at')
-        
         for i, row in enumerate(all_rows, start=1):
-            if i == 1:  # пропускаем заголовок
+            if i == 1:
                 continue
             if len(row) > 0 and str(row[0]) == str(request_number):
-                # Если есть время создания — проверяем
-                if target_created_at and len(row) > 2 and row[2] == target_created_at:
-                    row_number = i
-                    logger.info(f"✅ Найдена строка {row_number} для заявки №{request_number} (время: {target_created_at})")
-                    break
-                elif not target_created_at:
-                    row_number = i
-                    logger.info(f"✅ Найдена строка {row_number} для заявки №{request_number}")
-                    break
+                row_number = i
+                logger.info(f"✅ Найдена строка {row_number} для заявки №{request_number}")
+                break
         
         if row_number:
             # Обновляем статус
-            report_sheet.update(f'H{row_number}', status)
-            logger.info(f"✅ Статус заявки №{request_number} обновлен на '{status}'")
+            report_sheet.update(f'H{row_number}', status, value_input_option='USER_ENTERED')
+            logger.info(f"✅ Статус заявки №{request_number} обновлен на '{status}' в строке {row_number}")
             
             if status == REQUEST_STATUS_ASSIGNED and taken_by_username:
-                report_sheet.update(f'F{row_number}', taken_by_username)
-                report_sheet.update(f'G{row_number}', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                report_sheet.update(f'F{row_number}', taken_by_username, value_input_option='USER_ENTERED')
+                report_sheet.update(f'G{row_number}', datetime.now().strftime("%Y-%m-%d %H:%M:%S"), value_input_option='USER_ENTERED')
                 logger.info(f"✅ Данные назначения обновлены")
             
             return True
