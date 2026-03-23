@@ -655,30 +655,57 @@ async def handle_partner_chat(update: Update, context: ContextTypes.DEFAULT_TYPE
     if update.effective_chat.id != target_chat_id:
         return
     
+    # Игнорируем сообщения от бота
+    if update.effective_user.id == context.bot.id:
+        return
+    
     logger.info("=" * 60)
     logger.info(f"🔵 СООБЩЕНИЕ В ЧАТЕ ПАРТНЕРОВ от @{update.effective_user.username}")
     
+    # Проверяем, что это ответ на сообщение
     if update.message and update.message.reply_to_message:
         replied_message = update.message.reply_to_message
         partner = update.effective_user
         partner_username = partner.username or f"user_{partner.id}"
         partner_full_name = partner.full_name or partner_username
         
+        # Проверяем, что оригинальное сообщение от бота
+        if replied_message.from_user.id != context.bot.id:
+            logger.info("Ответ не на сообщение бота, игнорируем")
+            await update.message.reply_text(
+                "ℹ️ Отвечать можно только на сообщения бота с заявками"
+            )
+            return
+        
         logger.info(f"   Ответ на сообщение ID: {replied_message.message_id}")
+        
+        # Ищем заявку по ID сообщения
+        found_request = None
+        found_request_num = None
         
         for req_num, req_data in user_requests.items():
             if req_data.get('message_id') == replied_message.message_id and req_data.get('status') == REQUEST_STATUS_CREATED:
-                await accept_request(update, context, req_data, req_num, partner, partner_username, partner_full_name, target_chat_id)
-                return
+                found_request = req_data
+                found_request_num = req_num
+                break
         
-        await update.message.reply_text(
-            "❌ Эта заявка уже неактивна или была взята другим партнером"
-        )
+        if found_request and found_request_num:
+            await accept_request(update, context, found_request, found_request_num, partner, partner_username, partner_full_name, target_chat_id)
+        else:
+            await update.message.reply_text(
+                "❌ Эта заявка уже неактивна или была взята другим партнером"
+            )
         
         logger.info("=" * 60)
         return
     
+    # Если это просто текст в чате (не ответ и не команда)
     if update.message and update.message.text and not update.message.text.startswith('/'):
+        # Игнорируем сообщения, начинающиеся с "Закрепил" и подобные
+        if any(keyword in update.message.text for keyword in ["закрепил", "закрепила", "pin"]):
+            logger.info("Сообщение о закреплении, игнорируем")
+            return
+        
         await update.message.reply_text(
             "ℹ️ Чтобы забрать заявку:\n"
             "• Нажмите кнопку «✅ Забрать заявку» под сообщением\n"
