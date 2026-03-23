@@ -193,13 +193,13 @@ def save_request_to_sheet(request_number: int, request_data: Dict):
         
         logger.info(f"Сохраняем новую заявку №{request_number} в Google Sheets: {row_data}")
         
-        # Просто добавляем строку в конец
+        # Добавляем строку в конец
         report_sheet.append_row(row_data, value_input_option='USER_ENTERED')
-        logger.info(f"✅ Заявка №{request_number} добавлена в конец таблицы")
+        logger.info(f"✅ Заявка №{request_number} добавлена")
         return True
         
     except Exception as e:
-        logger.error(f"❌ Ошибка при сохранении заявки №{request_number} в Google Sheets: {e}")
+        logger.error(f"❌ Ошибка при сохранении: {e}")
         return False
         
 def update_request_status(request_number: int, status: str, taken_by_username: str = None):
@@ -211,38 +211,47 @@ def update_request_status(request_number: int, status: str, taken_by_username: s
         return False
     
     try:
-        # Получаем все строки таблицы
         all_rows = report_sheet.get_all_values()
         
-        # Ищем строку с нужным номером заявки (первая колонка)
+        # Ищем заявку по номеру и времени создания
         row_number = None
+        target_created_at = None
+        
+        # Сначала найдем время создания заявки в памяти
+        if request_number in user_requests:
+            target_created_at = user_requests[request_number].get('created_at')
+        
         for i, row in enumerate(all_rows, start=1):
-            # Пропускаем заголовок (первая строка)
-            if i == 1:
+            if i == 1:  # пропускаем заголовок
                 continue
             if len(row) > 0 and str(row[0]) == str(request_number):
-                row_number = i
-                logger.info(f"✅ Найдена строка {row_number} для заявки №{request_number}")
-                break
+                # Если есть время создания — проверяем его
+                if target_created_at and len(row) > 2 and row[2] == target_created_at:
+                    row_number = i
+                    logger.info(f"✅ Найдена строка {row_number} для заявки №{request_number} (время: {target_created_at})")
+                    break
+                # Если времени нет — берем первое совпадение
+                elif not target_created_at:
+                    row_number = i
+                    logger.info(f"✅ Найдена строка {row_number} для заявки №{request_number}")
+                    break
         
         if row_number:
-            # Обновляем статус в колонке H (8-я колонка)
             report_sheet.update(f'H{row_number}', status)
-            logger.info(f"✅ Статус заявки №{request_number} обновлен на '{status}' в строке {row_number}")
+            logger.info(f"✅ Статус заявки №{request_number} обновлен на '{status}'")
             
-            # Если заявка назначена, обновляем также ник и время
             if status == REQUEST_STATUS_ASSIGNED and taken_by_username:
                 report_sheet.update(f'F{row_number}', taken_by_username)
                 report_sheet.update(f'G{row_number}', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-                logger.info(f"✅ Данные назначения для заявки №{request_number} обновлены")
+                logger.info(f"✅ Данные назначения обновлены")
             
             return True
         else:
-            logger.error(f"❌ Не найдена строка для заявки №{request_number} в Google Sheets")
+            logger.error(f"❌ Не найдена строка для заявки №{request_number}")
             return False
             
     except Exception as e:
-        logger.error(f"❌ Ошибка при обновлении статуса заявки №{request_number}: {e}")
+        logger.error(f"❌ Ошибка: {e}")
         return False
 
 # ========== ФУНКЦИЯ ДЛЯ ПРОВЕРКИ ПРОСРОЧЕННЫХ ЗАЯВОК ==========
