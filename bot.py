@@ -150,17 +150,16 @@ def setup_report_sheet(spreadsheet):
             report_sheet = spreadsheet.worksheet(REPORT_SHEET_NAME)
             logger.info(f"✅ Лист '{REPORT_SHEET_NAME}' найден")
             
-            # Проверяем, есть ли заголовок для статуса
-            headers = report_sheet.row_values(1)
+            # Проверяем, есть ли заголовок в первой строке
+            first_row = report_sheet.row_values(1)
             expected_headers = ["Номер заявки", "Ник отправителя", "Время создания", "Адрес доставки", "Контакт клиента", "Ник кто забрал", "Время взятия", "Статус"]
             
-            if len(headers) < len(expected_headers):
-                # Обновляем заголовки если нужно
-                logger.info(f"Обновляем заголовки в листе '{REPORT_SHEET_NAME}'")
-                report_sheet.update('A1:H1', [expected_headers])
-            elif len(headers) == 7:  # Если старый формат (без статуса)
-                logger.info(f"Добавляем колонку статуса в лист '{REPORT_SHEET_NAME}'")
-                report_sheet.update('H1', 'Статус')
+            # Если первая строка пустая или не содержит заголовки
+            if not first_row or len(first_row) < 8 or first_row[0] != "Номер заявки":
+                logger.info("Обновляем заголовки в листе 'Отчётность'")
+                # Вставляем заголовки в первую строку
+                report_sheet.insert_row(expected_headers, 1)
+                logger.info("✅ Заголовки добавлены")
             
         except gspread.WorksheetNotFound:
             logger.info(f"Создаем новый лист '{REPORT_SHEET_NAME}'")
@@ -173,7 +172,6 @@ def setup_report_sheet(spreadsheet):
     except Exception as e:
         logger.error(f"❌ Ошибка при настройке листа отчетности: {e}")
         return False
-
 
 def save_request_to_sheet(request_number: int, request_data: Dict):
     """Сохраняет данные заявки в лист отчетности при создании"""
