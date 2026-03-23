@@ -1020,8 +1020,8 @@ async def set_commands(app):
         ('my_requests', '📋 Мои взятые заявки'),
     ]
     
-    # Команды для группы партнёров (выдающие партнёры)
-    group_commands = [
+    # Команды для чатов партнёров (выдающие партнёры)
+    partner_commands = [
         ('status', '📊 Активные заявки'),
         ('take', '✅ Взять заявку (например /take 1)'),
     ]
@@ -1034,13 +1034,14 @@ async def set_commands(app):
         )
         logger.info("✅ Команды для личных чатов установлены")
         
-        # Устанавливаем команды для группы партнёров
-        partner_chat_id = int(CHAT_ID)
-        await app.bot.set_my_commands(
-            group_commands,
-            scope=BotCommandScopeChat(chat_id=partner_chat_id)
-        )
-        logger.info(f"✅ Команды для чата партнёров (ID: {partner_chat_id}) установлены")
+        # Устанавливаем команды для КАЖДОГО чата из CITY_CHAT_MAP
+        for city, chat_id_str in CITY_CHAT_MAP.items():
+            chat_id = int(chat_id_str)
+            await app.bot.set_my_commands(
+                partner_commands,
+                scope=BotCommandScopeChat(chat_id=chat_id)
+            )
+            logger.info(f"✅ Команды для чата {city} (ID: {chat_id}) установлены")
         
     except Exception as e:
         logger.error(f"❌ Ошибка при установке команд: {e}")
