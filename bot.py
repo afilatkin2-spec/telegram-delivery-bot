@@ -39,8 +39,8 @@ CITY_CHAT_MAP = {
     "Самара": "-1003844216284",
 }
 
-# ВРЕМЯ ПРОСРОЧКИ (30 секунд для теста)
-REQUEST_TIMEOUT_SECONDS = 30
+# ВРЕМЯ ПРОСРОЧКИ (10 минут)
+REQUEST_TIMEOUT_SECONDS = 600
 
 # Московское время
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
@@ -283,7 +283,7 @@ async def check_expired_requests(context: ContextTypes.DEFAULT_TYPE):
                     chat_id=req_data['user_id'],
                     text=(
                         f"⏰ Заявка №{req_num} просрочена\n\n"
-                        f"Никто не взял заявку в течение {REQUEST_TIMEOUT_SECONDS} секунд.\n"
+                        f"Никто не взял заявку в течение 10 минут.\n"
                         f"📝 Адрес: {req_data['address']}\n"
                         f"📞 Контакт: {req_data.get('contact', 'Не указан')}\n\n"
                         f"❌ Отправьте заявку в СВК"
@@ -300,7 +300,7 @@ async def check_expired_requests(context: ContextTypes.DEFAULT_TYPE):
                     f"⏰ Заявка №{req_num} закрыта\n"
                     f"📝 Адрес: {req_data['address']}\n"
                     f"👤 От: @{req_data['username']}\n"
-                    f"❌ Причина: никто не взял в течение {REQUEST_TIMEOUT_SECONDS} секунд"
+                    f"❌ Причина: никто не взял в течение 10 минут"
                 )
             )
             logger.info(f"✅ Уведомление о закрытии отправлено в чат {target_chat}")
@@ -419,12 +419,17 @@ SIMPLE_INSTRUCTION = """
 • Укажите способ связи с клиентом
 • Получите номер заявки
 • Ожидайте, когда выдающий партнёр её заберёт
+• Вы получите уведомление, когда вашу заявку примут
+• Если партнёр откажется - вы тоже получите уведомление
+• Если за 10 минут никто не взял - заявка закроется автоматически
 
 ⚡️ Для выдающих партнёров:
 • Кнопка «✅ Забрать заявку» появится в вашем региональном чате
 • Нажмите её, чтобы принять заявку
 • В личные сообщения придёт информация по доставке
-• Не взятые заявки автоматически закрываются через 30 секунд
+• Продающий партнёр получит уведомление о том, что вы взяли заявку
+• Если не можете выполнить - используйте /my_requests для отказа
+• Не взятые заявки автоматически закрываются через 10 минут
 
 ✅ Всё просто! Нажмите «📝 Оставить заявку» для создания заявки
 """
@@ -600,7 +605,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📦 В вашем регионе есть новая заявка на доставку №{request_number}\n"
         f"📝 Адрес: {user_address}\n"
         f"🏙️ Город: {selected_city}\n"
-        f"⏰ У вас есть {REQUEST_TIMEOUT_SECONDS} секунд, чтобы забрать её"
+        f"⏰ У вас есть 10 минут, чтобы забрать её"
     )
     
     sent_message = await context.bot.send_message(
@@ -618,7 +623,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📝 Адрес: {user_address}\n"
         f"📞 Контакт: {user_contact}\n\n"
         f"С вами свяжется партнёр.\n"
-        f"Если никто не свяжется в течение {REQUEST_TIMEOUT_SECONDS} секунд, заявка закроется автоматически",
+        f"Если никто не свяжется в течение 10 минут, заявка закроется автоматически",
         reply_markup=get_main_keyboard()
     )
     
