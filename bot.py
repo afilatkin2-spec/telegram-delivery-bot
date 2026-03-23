@@ -254,7 +254,6 @@ def update_request_status(request_number: int, status: str, taken_by_username: s
         logger.error(f"❌ Ошибка при обновлении статуса заявки №{request_number}: {e}")
         return False
 
-
 # ========== ФУНКЦИЯ ДЛЯ ПРОВЕРКИ ПРОСРОЧЕННЫХ ЗАЯВОК ==========
 async def check_expired_requests(context: ContextTypes.DEFAULT_TYPE):
     """Проверяет просроченные заявки и отправляет уведомления"""
@@ -288,6 +287,9 @@ async def check_expired_requests(context: ContextTypes.DEFAULT_TYPE):
         req_data['status'] = REQUEST_STATUS_EXPIRED
         update_request_status(req_num, REQUEST_STATUS_EXPIRED)
         
+        # Получаем чат, куда была отправлена заявка
+        target_chat = req_data.get('target_chat', int(CHAT_ID))
+        
         # УВЕДОМЛЕНИЕ ПРОДАЮЩЕМУ ПАРТНЁРУ
         try:
             if req_data.get('user_id'):
@@ -305,10 +307,10 @@ async def check_expired_requests(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"❌ Ошибка уведомления о просрочке: {e}")
         
-        # УВЕДОМЛЕНИЕ В ЧАТ ПАРТНЁРОВ
+        # УВЕДОМЛЕНИЕ В ЧАТ, ГДЕ БЫЛА ЗАЯВКА
         try:
             await context.bot.send_message(
-                chat_id=int(CHAT_ID),
+                chat_id=target_chat,
                 text=(
                     f"⏰ Заявка №{req_num} закрыта\n"
                     f"📝 Адрес: {req_data['address']}\n"
@@ -316,7 +318,7 @@ async def check_expired_requests(context: ContextTypes.DEFAULT_TYPE):
                     f"❌ Причина: никто не взял в течение {REQUEST_TIMEOUT_SECONDS} секунд"
                 )
             )
-            logger.info(f"✅ Уведомление о закрытии отправлено в чат")
+            logger.info(f"✅ Уведомление о закрытии отправлено в чат {target_chat}")
         except Exception as e:
             logger.error(f"❌ Ошибка уведомления в чат: {e}")
         
@@ -324,16 +326,17 @@ async def check_expired_requests(context: ContextTypes.DEFAULT_TYPE):
         try:
             if req_data.get('message_id'):
                 await context.bot.edit_message_text(
-                    chat_id=int(CHAT_ID),
+                    chat_id=target_chat,
                     message_id=req_data['message_id'],
                     text=f"📦 Заявка №{req_num}\n📝 Адрес: {req_data['address']}\n👤 От: @{req_data['username']}\n\n❌ ЗАЯВКА ПРОСРОЧЕНА"
                 )
-                logger.info(f"✅ Кнопка удалена из сообщения")
+                logger.info(f"✅ Кнопка удалена из сообщения в чате {target_chat}")
         except Exception as e:
             logger.error(f"❌ Ошибка удаления кнопки: {e}")
     
     if expired_requests:
         logger.info(f"✅ Обработано {len(expired_requests)} просроченных заявок")
+
 
 
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
@@ -540,7 +543,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка введенного контакта и создание заявки"""
     user_id = update.effective_user.id
     user_contact = update.message.text
-    target_chat_id = int(CHAT_ID)
+    target_chat_id = int(CHAT_ID)  # Оставляем как запасной вариант
     
     user_data = temp_request_data.get(user_id, {})
     user_address = user_data.get('address', '')
@@ -549,18 +552,31 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     request_number = get_next_request_number()
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
+    # Находим город для определения чата
+    matched_city = find_matching_city(user_address)
+    city_name = matched_city['city'] if matched_city else None
+    
+    # Определяем, в какой чат отправлять заявку
+    if city_name and city_name in CITY_CHAT_MAP:
+        chat_to_send = int(CITY_CHAT_MAP[city_name])
+        logger.info(f"📍 Заявка №{request_number} направлена в чат для города {city_name} (ID: {chat_to_send})")
+    else:
+        chat_to_send = target_chat_id
+        logger.warning(f"⚠️ Город {city_name} не найден в карте, заявка №{request_number} отправлена в чат по умолчанию")
+    
     user_requests[request_number] = {
         'user_id': user_id,
         'username': username,
         'address': user_address,
         'contact': user_contact,
-        'matched_city': find_matching_city(user_address),
+        'matched_city': matched_city,
         'taken_by': None,
         'taken_by_username': None,
         'taken_by_id': None,
         'created_at': current_time,
         'status': REQUEST_STATUS_CREATED,
-        'message_id': None
+        'message_id': None,
+        'target_chat': chat_to_send  # Сохраняем ID чата для будущих уведомлений
     }
     
     save_request_to_sheet(request_number, user_requests[request_number])
@@ -571,14 +587,15 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⏰ У вас есть {REQUEST_TIMEOUT_SECONDS} секунд, чтобы забрать её"
     )
     
+    # Отправляем в нужный чат
     sent_message = await context.bot.send_message(
-        chat_id=target_chat_id,
+        chat_id=chat_to_send,
         text=chat_message,
         reply_markup=get_partner_chat_keyboard(request_number)
     )
     
     user_requests[request_number]['message_id'] = sent_message.message_id
-    logger.info(f"   Сообщение в чат отправлено, ID: {sent_message.message_id}")
+    logger.info(f"   Сообщение в чат {chat_to_send} отправлено, ID: {sent_message.message_id}")
     
     await update.message.reply_text(
         f"✅ Заявка №{request_number} отправлена, с вами свяжется партнёр.\n"
@@ -593,7 +610,6 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"✅ Создана заявка №{request_number} с контактом: {user_contact}")
     
     return ConversationHandler.END
-
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отмена создания заявки"""
@@ -702,16 +718,19 @@ async def accept_request(update_or_query, context, req_data, request_number, par
     taken_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     req_data['taken_at'] = taken_at
     
-    logger.info(f"✅ Партнер @{partner_username} забирает заявку №{request_number}")
+    # Получаем чат, где была заявка
+    original_chat = req_data.get('target_chat', target_chat_id)
+    
+    logger.info(f"✅ Партнер @{partner_username} забирает заявку №{request_number} из чата {original_chat}")
     
     if hasattr(update_or_query, 'edit_message_text'):
         await update_or_query.edit_message_text(
             text=update_or_query.message.text
         )
     
-    # Сообщение в общий чат
+    # Сообщение в чат, где была заявка
     await context.bot.send_message(
-        chat_id=target_chat_id,
+        chat_id=original_chat,
         text=f"🔥 Выдающий партнёр @{partner_username} забрал заявку №{request_number}"
     )
     
