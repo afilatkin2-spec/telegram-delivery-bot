@@ -246,7 +246,7 @@ def update_request_status(request_number: int, status: str, taken_by_username: s
             
             if status == REQUEST_STATUS_ASSIGNED and taken_by_username:
                 report_sheet.update(f'F{row_number}', taken_by_username, value_input_option='USER_ENTERED')
-                report_sheet.update(f'G{row_number}', datetime.now().strftime("%Y-%m-%d %H:%M:%S"), value_input_option='USER_ENTERED')
+                report_sheet.update(f'G{row_number}', datetime.now(MOSCOW_TZ).strftime("%Y-%m-%d %H:%M:%S"))
                 logger.info(f"✅ Данные назначения обновлены")
             
             return True
@@ -269,7 +269,7 @@ async def check_expired_requests(context: ContextTypes.DEFAULT_TYPE):
     
     logger.info("🔍 Проверка просроченных заявок...")
     
-    now = datetime.now()
+    now = datetime.now(MOSCOW_TZ)
     expired_requests = []
     
     # Ищем заявки со статусом "создана" старше 30 секунд
@@ -558,7 +558,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = user_data.get('username', f"user_{user_id}")
     
     request_number = get_next_request_number()
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    current_time = datetime.now(MOSCOW_TZ).strftime("%Y-%m-%d %H:%M:%S")
     
     # Находим город для определения чата
     matched_city = find_matching_city(user_address)
@@ -723,7 +723,7 @@ async def accept_request(update_or_query, context, req_data, request_number, par
     req_data['taken_by_username'] = partner_username
     req_data['taken_by_id'] = partner.id
     req_data['status'] = REQUEST_STATUS_ASSIGNED
-    taken_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    taken_at = datetime.now(MOSCOW_TZ).strftime("%Y-%m-%d %H:%M:%S")
     req_data['taken_at'] = taken_at
     
     # Получаем чат, где была заявка
