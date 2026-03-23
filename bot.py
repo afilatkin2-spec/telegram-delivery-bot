@@ -65,7 +65,7 @@ google_client = None
 report_sheet = None
 user_states: Dict[int, bool] = {}
 temp_request_data: Dict[int, Dict[str, Any]] = {}
-request_row_numbers: Dict[int, int] = {}
+
 
 # Создаем application как глобальную переменную
 application = None
@@ -173,7 +173,7 @@ def setup_report_sheet(spreadsheet):
         return False
 def save_request_to_sheet(request_number: int, request_data: Dict):
     """Сохраняет данные заявки в лист отчетности при создании"""
-    global report_sheet, request_row_numbers
+    global report_sheet
     
     if report_sheet is None:
         logger.error(f"❌ Лист отчетности не инициализирован")
@@ -186,52 +186,44 @@ def save_request_to_sheet(request_number: int, request_data: Dict):
             request_data.get('created_at', ''),
             request_data.get('address', ''),
             request_data.get('contact', ''),
-            '',  # Ник кто забрал (пока пусто)
-            '',  # Время взятия (пока пусто)
+            '',
+            '',
             REQUEST_STATUS_CREATED
         ]
         
         logger.info(f"Сохраняем новую заявку №{request_number} в Google Sheets: {row_data}")
         
-        # Добавляем строку
-        result = report_sheet.append_row(row_data, value_input_option='USER_ENTERED')
-        
-        if result:
-            # Получаем все строки
-            all_rows = report_sheet.get_all_values()
-            # Номер строки = количество строк (первая строка — заголовки)
-            row_number = len(all_rows)
-            request_row_numbers[request_number] = row_number
-            logger.info(f"✅ Заявка №{request_number} сохранена в лист '{REPORT_SHEET_NAME}', строка {row_number}")
-            return True
-        else:
-            logger.error(f"❌ Не удалось добавить строку для заявки №{request_number}")
-            return False
+        # Просто добавляем строку в конец
+        report_sheet.append_row(row_data, value_input_option='USER_ENTERED')
+        logger.info(f"✅ Заявка №{request_number} добавлена в конец таблицы")
+        return True
         
     except Exception as e:
         logger.error(f"❌ Ошибка при сохранении заявки №{request_number} в Google Sheets: {e}")
         return False
+        
 def update_request_status(request_number: int, status: str, taken_by_username: str = None):
     """Обновляет статус заявки в Google Sheets"""
-    global report_sheet, request_row_numbers
+    global report_sheet
     
     if report_sheet is None:
         logger.error(f"❌ Лист отчетности не инициализирован")
         return False
     
     try:
-        # Получаем номер строки для этой заявки
-        row_number = request_row_numbers.get(request_number)
+        # Получаем все строки таблицы
+        all_rows = report_sheet.get_all_values()
         
-        if not row_number:
-            # Если не нашли в словаре, ищем по номеру заявки в таблице
-            all_rows = report_sheet.get_all_values()
-            for i, row in enumerate(all_rows, start=1):
-                if i > 1 and len(row) > 0 and str(row[0]) == str(request_number):
-                    row_number = i
-                    request_row_numbers[request_number] = i
-                    logger.info(f"Найдена строка {row_number} для заявки №{request_number}")
-                    break
+        # Ищем строку с нужным номером заявки (первая колонка)
+        row_number = None
+        for i, row in enumerate(all_rows, start=1):
+            # Пропускаем заголовок (первая строка)
+            if i == 1:
+                continue
+            if len(row) > 0 and str(row[0]) == str(request_number):
+                row_number = i
+                logger.info(f"✅ Найдена строка {row_number} для заявки №{request_number}")
+                break
         
         if row_number:
             # Обновляем статус в колонке H (8-я колонка)
@@ -240,8 +232,8 @@ def update_request_status(request_number: int, status: str, taken_by_username: s
             
             # Если заявка назначена, обновляем также ник и время
             if status == REQUEST_STATUS_ASSIGNED and taken_by_username:
-                report_sheet.update(f'F{row_number}', taken_by_username)  # Колонка F — Ник кто забрал
-                report_sheet.update(f'G{row_number}', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))  # Колонка G — Время взятия
+                report_sheet.update(f'F{row_number}', taken_by_username)
+                report_sheet.update(f'G{row_number}', datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                 logger.info(f"✅ Данные назначения для заявки №{request_number} обновлены")
             
             return True
