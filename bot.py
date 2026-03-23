@@ -146,33 +146,31 @@ def setup_report_sheet(spreadsheet):
     global report_sheet
     
     try:
+        # Пробуем получить лист отчетности
         try:
             report_sheet = spreadsheet.worksheet(REPORT_SHEET_NAME)
             logger.info(f"✅ Лист '{REPORT_SHEET_NAME}' найден")
             
-            # Проверяем, есть ли заголовок в первой строке
-            first_row = report_sheet.row_values(1)
-            expected_headers = ["Номер заявки", "Ник отправителя", "Время создания", "Адрес доставки", "Контакт клиента", "Ник кто забрал", "Время взятия", "Статус"]
-            
-            # Если первая строка пустая или не содержит заголовки
-            if not first_row or len(first_row) < 8 or first_row[0] != "Номер заявки":
-                logger.info("Обновляем заголовки в листе 'Отчётность'")
-                # Вставляем заголовки в первую строку
-                report_sheet.insert_row(expected_headers, 1)
-                logger.info("✅ Заголовки добавлены")
+            # ПОЛНОСТЬЮ ОЧИЩАЕМ ЛИСТ
+            report_sheet.clear()
+            logger.info(f"✅ Лист '{REPORT_SHEET_NAME}' очищен")
             
         except gspread.WorksheetNotFound:
+            # Если листа нет — создаем
             logger.info(f"Создаем новый лист '{REPORT_SHEET_NAME}'")
             report_sheet = spreadsheet.add_worksheet(title=REPORT_SHEET_NAME, rows=1000, cols=20)
-            headers = ["Номер заявки", "Ник отправителя", "Время создания", "Адрес доставки", "Контакт клиента", "Ник кто забрал", "Время взятия", "Статус"]
-            report_sheet.append_row(headers)
-            logger.info(f"✅ Создан новый лист '{REPORT_SHEET_NAME}' с заголовками")
+            logger.info(f"✅ Создан новый лист '{REPORT_SHEET_NAME}'")
+        
+        # Добавляем заголовки в первую строку
+        headers = ["Номер заявки", "Ник отправителя", "Время создания", "Адрес доставки", "Контакт клиента", "Ник кто забрал", "Время взятия", "Статус"]
+        report_sheet.append_row(headers)
+        logger.info(f"✅ Заголовки добавлены в лист '{REPORT_SHEET_NAME}'")
         
         return True
+        
     except Exception as e:
         logger.error(f"❌ Ошибка при настройке листа отчетности: {e}")
         return False
-
 def save_request_to_sheet(request_number: int, request_data: Dict):
     """Сохраняет данные заявки в лист отчетности при создании"""
     global report_sheet, request_row_numbers
@@ -194,11 +192,14 @@ def save_request_to_sheet(request_number: int, request_data: Dict):
         ]
         
         logger.info(f"Сохраняем новую заявку №{request_number} в Google Sheets: {row_data}")
+        
+        # Добавляем строку после заголовков
         result = report_sheet.append_row(row_data, value_input_option='USER_ENTERED')
         
         if result:
+            # Получаем номер добавленной строки (с учетом заголовков)
             all_rows = report_sheet.get_all_values()
-            row_number = len(all_rows)
+            row_number = len(all_rows)  # первая строка — заголовки
             request_row_numbers[request_number] = row_number
             logger.info(f"✅ Заявка №{request_number} сохранена в лист '{REPORT_SHEET_NAME}', строка {row_number}")
             return True
@@ -209,7 +210,6 @@ def save_request_to_sheet(request_number: int, request_data: Dict):
     except Exception as e:
         logger.error(f"❌ Ошибка при сохранении заявки №{request_number} в Google Sheets: {e}")
         return False
-
 
 def update_request_status(request_number: int, status: str, taken_by_username: str = None):
     """Обновляет статус заявки в Google Sheets"""
