@@ -146,31 +146,35 @@ def setup_report_sheet(spreadsheet):
     global report_sheet
     
     try:
-        # Пробуем получить лист отчетности
+        # Пробуем получить лист
         try:
             report_sheet = spreadsheet.worksheet(REPORT_SHEET_NAME)
             logger.info(f"✅ Лист '{REPORT_SHEET_NAME}' найден")
             
-            # ПОЛНОСТЬЮ ОЧИЩАЕМ ЛИСТ
-            report_sheet.clear()
-            logger.info(f"✅ Лист '{REPORT_SHEET_NAME}' очищен")
+            # Проверяем, есть ли заголовки
+            first_row = report_sheet.row_values(1)
+            if not first_row or len(first_row) < 8 or first_row[0] != "Номер заявки":
+                # Если нет заголовков — очищаем и добавляем
+                logger.info("Очищаем лист и добавляем заголовки")
+                report_sheet.clear()
+                headers = ["Номер заявки", "Ник отправителя", "Время создания", "Адрес доставки", "Контакт клиента", "Ник кто забрал", "Время взятия", "Статус"]
+                report_sheet.append_row(headers)
+                logger.info("✅ Заголовки добавлены")
             
         except gspread.WorksheetNotFound:
-            # Если листа нет — создаем
+            # Создаём новый лист
             logger.info(f"Создаем новый лист '{REPORT_SHEET_NAME}'")
             report_sheet = spreadsheet.add_worksheet(title=REPORT_SHEET_NAME, rows=1000, cols=20)
-            logger.info(f"✅ Создан новый лист '{REPORT_SHEET_NAME}'")
-        
-        # Добавляем заголовки в первую строку
-        headers = ["Номер заявки", "Ник отправителя", "Время создания", "Адрес доставки", "Контакт клиента", "Ник кто забрал", "Время взятия", "Статус"]
-        report_sheet.append_row(headers)
-        logger.info(f"✅ Заголовки добавлены в лист '{REPORT_SHEET_NAME}'")
+            headers = ["Номер заявки", "Ник отправителя", "Время создания", "Адрес доставки", "Контакт клиента", "Ник кто забрал", "Время взятия", "Статус"]
+            report_sheet.append_row(headers)
+            logger.info(f"✅ Создан новый лист '{REPORT_SHEET_NAME}' с заголовками")
         
         return True
         
     except Exception as e:
         logger.error(f"❌ Ошибка при настройке листа отчетности: {e}")
         return False
+        
 def save_request_to_sheet(request_number: int, request_data: Dict):
     """Сохраняет данные заявки в лист отчетности при создании"""
     global report_sheet
@@ -180,6 +184,13 @@ def save_request_to_sheet(request_number: int, request_data: Dict):
         return False
     
     try:
+        # Проверяем, что первая строка — заголовки (на всякий случай)
+        first_row = report_sheet.row_values(1)
+        if not first_row or first_row[0] != "Номер заявки":
+            logger.warning("Заголовки отсутствуют, добавляем...")
+            headers = ["Номер заявки", "Ник отправителя", "Время создания", "Адрес доставки", "Контакт клиента", "Ник кто забрал", "Время взятия", "Статус"]
+            report_sheet.insert_row(headers, 1)
+        
         row_data = [
             request_number,
             request_data.get('username', ''),
@@ -199,7 +210,7 @@ def save_request_to_sheet(request_number: int, request_data: Dict):
         return True
         
     except Exception as e:
-        logger.error(f"❌ Ошибка при сохранении: {e}")
+        logger.error(f"❌ Ошибка при сохранении заявки №{request_number}: {e}")
         return False
         
 def update_request_status(request_number: int, status: str, taken_by_username: str = None):
@@ -213,11 +224,11 @@ def update_request_status(request_number: int, status: str, taken_by_username: s
     try:
         all_rows = report_sheet.get_all_values()
         
-        # Ищем заявку по номеру и времени создания
+        # Ищем строку с нужным номером заявки
         row_number = None
         target_created_at = None
         
-        # Сначала найдем время создания заявки в памяти
+        # Находим время создания заявки в памяти
         if request_number in user_requests:
             target_created_at = user_requests[request_number].get('created_at')
         
@@ -225,18 +236,18 @@ def update_request_status(request_number: int, status: str, taken_by_username: s
             if i == 1:  # пропускаем заголовок
                 continue
             if len(row) > 0 and str(row[0]) == str(request_number):
-                # Если есть время создания — проверяем его
+                # Если есть время создания — проверяем
                 if target_created_at and len(row) > 2 and row[2] == target_created_at:
                     row_number = i
                     logger.info(f"✅ Найдена строка {row_number} для заявки №{request_number} (время: {target_created_at})")
                     break
-                # Если времени нет — берем первое совпадение
                 elif not target_created_at:
                     row_number = i
                     logger.info(f"✅ Найдена строка {row_number} для заявки №{request_number}")
                     break
         
         if row_number:
+            # Обновляем статус
             report_sheet.update(f'H{row_number}', status)
             logger.info(f"✅ Статус заявки №{request_number} обновлен на '{status}'")
             
