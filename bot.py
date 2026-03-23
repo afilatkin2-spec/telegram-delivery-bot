@@ -1,3 +1,4 @@
+
 import logging
 import re
 import sys
@@ -6,6 +7,11 @@ import json
 from difflib import SequenceMatcher
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
+from datetime import datetime, timedelta
+import pytz  # добавляем импорт
+
+# Настройка московского времени
+MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 
 # Проверка версии Python
 if sys.version_info >= (3, 12):
