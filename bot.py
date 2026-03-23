@@ -257,6 +257,7 @@ async def check_expired_requests(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now(MOSCOW_TZ)
     expired_requests = []
     
+    # Ищем заявки со статусом "создана" старше 10 минут
     for req_num, req_data in list(user_requests.items()):
         if req_data['status'] == REQUEST_STATUS_CREATED:
             created_at = datetime.strptime(req_data['created_at'], "%Y-%m-%d %H:%M:%S")
@@ -272,11 +273,14 @@ async def check_expired_requests(context: ContextTypes.DEFAULT_TYPE):
     for req_num, req_data in expired_requests:
         logger.info(f"⏰ Заявка №{req_num} просрочена")
         
+        # Обновляем статус
         req_data['status'] = REQUEST_STATUS_EXPIRED
         update_request_status(req_num, REQUEST_STATUS_EXPIRED)
         
+        # Получаем чат, куда была отправлена заявка
         target_chat = req_data.get('target_chat', int(CHAT_ID))
         
+        # 1. УВЕДОМЛЕНИЕ ПРОДАЮЩЕМУ ПАРТНЁРУ (в личку)
         try:
             if req_data.get('user_id'):
                 await context.bot.send_message(
@@ -293,30 +297,22 @@ async def check_expired_requests(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"❌ Ошибка уведомления о просрочке: {e}")
         
-        try:
-            await context.bot.send_message(
-                chat_id=target_chat,
-                text=(
-                    f"⏰ Заявка №{req_num} закрыта\n"
-                    f"📝 Адрес: {req_data['address']}\n"
-                    f"👤 От: @{req_data['username']}\n"
-                    f"❌ Причина: никто не взял в течение 10 минут"
-                )
-            )
-            logger.info(f"✅ Уведомление о закрытии отправлено в чат {target_chat}")
-        except Exception as e:
-            logger.error(f"❌ Ошибка уведомления в чат: {e}")
-        
+        # 2. ОБНОВЛЕНИЕ СООБЩЕНИЯ В ОБЩЕМ ЧАТЕ (убираем кнопку, ставим пометку)
         try:
             if req_data.get('message_id'):
                 await context.bot.edit_message_text(
                     chat_id=target_chat,
                     message_id=req_data['message_id'],
-                    text=f"📦 Заявка №{req_num}\n📝 Адрес: {req_data['address']}\n👤 От: @{req_data['username']}\n\n❌ ЗАЯВКА ПРОСРОЧЕНА"
+                    text=(
+                        f"📦 Заявка №{req_num}\n"
+                        f"📝 Адрес: {req_data['address']}\n"
+                        f"👤 От: @{req_data['username']}\n\n"
+                        f"❌ ЗАЯВКА ПРОСРОЧЕНА (не взята за 10 минут)"
+                    )
                 )
-                logger.info(f"✅ Кнопка удалена из сообщения в чате {target_chat}")
+                logger.info(f"✅ Сообщение о просрочке обновлено в чате {target_chat}")
         except Exception as e:
-            logger.error(f"❌ Ошибка удаления кнопки: {e}")
+            logger.error(f"❌ Ошибка обновления сообщения: {e}")
     
     if expired_requests:
         logger.info(f"✅ Обработано {len(expired_requests)} просроченных заявок")
