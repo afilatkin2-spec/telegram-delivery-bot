@@ -31,6 +31,13 @@ SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1-0CLwe15mNEHf81-bUVhV
 SHEET_NAME = "Города"
 REPORT_SHEET_NAME = "Отчётность"
 
+# ========== НАСТРОЙКИ ЧАТОВ ПО ГОРОДАМ ==========
+CITY_CHAT_MAP = {
+    "Казань": "-1003745784469",
+    "Набережные Челны": "-1003781075076",
+    "Самара": "-1003844216284",
+}
+
 # ВРЕМЯ ПРОСРОЧКИ (30 секунд для теста)
 REQUEST_TIMEOUT_SECONDS = 30
 
