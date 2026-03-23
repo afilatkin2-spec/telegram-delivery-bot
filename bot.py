@@ -287,9 +287,6 @@ async def check_expired_requests(context: ContextTypes.DEFAULT_TYPE):
         req_data['status'] = REQUEST_STATUS_EXPIRED
         update_request_status(req_num, REQUEST_STATUS_EXPIRED)
         
-        # Получаем чат, куда была отправлена заявка
-        target_chat = req_data.get('target_chat', int(CHAT_ID))
-        
         # УВЕДОМЛЕНИЕ ПРОДАЮЩЕМУ ПАРТНЁРУ
         try:
             if req_data.get('user_id'):
@@ -306,6 +303,12 @@ async def check_expired_requests(context: ContextTypes.DEFAULT_TYPE):
                 logger.info(f"✅ Уведомление о просрочке отправлено @{req_data['username']}")
         except Exception as e:
             logger.error(f"❌ Ошибка уведомления о просрочке: {e}")
+
+        # В функции check_expired_requests, замените этот блок:
+        # УВЕДОМЛЕНИЕ В ЧАТ ПАРТНЁРОВ
+        
+        # Получаем чат, куда была отправлена заявка
+        target_chat = req_data.get('target_chat', int(CHAT_ID))
         
         # УВЕДОМЛЕНИЕ В ЧАТ, ГДЕ БЫЛА ЗАЯВКА
         try:
@@ -322,6 +325,7 @@ async def check_expired_requests(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"❌ Ошибка уведомления в чат: {e}")
         
+      
         # Удаляем кнопку из сообщения в чате
         try:
             if req_data.get('message_id'):
@@ -543,7 +547,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка введенного контакта и создание заявки"""
     user_id = update.effective_user.id
     user_contact = update.message.text
-    target_chat_id = int(CHAT_ID)  # Оставляем как запасной вариант
+    target_chat_id = int(CHAT_ID)  # Запасной чат по умолчанию
     
     user_data = temp_request_data.get(user_id, {})
     user_address = user_data.get('address', '')
@@ -734,6 +738,7 @@ async def accept_request(update_or_query, context, req_data, request_number, par
         text=f"🔥 Выдающий партнёр @{partner_username} забрал заявку №{request_number}"
     )
     
+    # ... остальной код без изменений
     # Уведомление выдающему партнёру
     try:
         delivery_info = (
